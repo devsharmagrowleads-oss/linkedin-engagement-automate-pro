@@ -5,33 +5,30 @@
  */
 class ReactionSelector {
   constructor(reactionMap) {
-    this.reactionMap = reactionMap || {};
+    // Pre-build a flat lookup array with pre-lowercased keywords (avoids repeated toLowerCase per post)
+    const priorityOrder = ['celebrate', 'support', 'love', 'insightful', 'funny'];
+    this._rules = [];
+    for (const reactionType of priorityOrder) {
+      const keywords = (reactionMap || {})[reactionType] || [];
+      for (const keyword of keywords) {
+        this._rules.push({ keyword: keyword.toLowerCase(), reactionType });
+      }
+    }
   }
 
   /**
    * Determine the best reaction type for a post
-   * Scans post text against each reaction's keywords
    * First match wins. No match defaults to 'like'.
-   *
-   * @param {string} postText - The post content
-   * @returns {string} - Reaction type: 'like', 'celebrate', 'insightful', 'love', 'support', 'funny'
    */
   selectReaction(postText) {
     const text = (postText || '').toLowerCase();
 
-    // Check each reaction type's keywords (order matters for priority)
-    const priorityOrder = ['celebrate', 'support', 'love', 'insightful', 'funny'];
-
-    for (const reactionType of priorityOrder) {
-      const keywords = this.reactionMap[reactionType] || [];
-      for (const keyword of keywords) {
-        if (text.includes(keyword.toLowerCase())) {
-          return reactionType;
-        }
+    for (const rule of this._rules) {
+      if (text.includes(rule.keyword)) {
+        return rule.reactionType;
       }
     }
 
-    // Default to 'like'
     return 'like';
   }
 }

@@ -41,9 +41,12 @@ let pollInterval;
 
 async function refreshDashboard() {
   try {
-    const status = await api('GET', '/status');
-    const stats = await api('GET', '/stats?days=7');
-    const recent = await api('GET', '/reactions?limit=10');
+    // Fetch all dashboard data in parallel instead of sequentially
+    const [status, stats, recent] = await Promise.all([
+      api('GET', '/status'),
+      api('GET', '/stats?days=7'),
+      api('GET', '/reactions?limit=10'),
+    ]);
 
     // Update status badge
     const badge = document.getElementById('statusBadge');
@@ -374,17 +377,17 @@ async function loadSessions() {
 
   tbody.innerHTML = data.sessions.map(s => `
     <tr>
-      <td>${s.date}</td>
-      <td>${s.window}</td>
+      <td>${escapeHtml(s.date)}</td>
+      <td>${escapeHtml(s.window)}</td>
       <td>${formatTime(s.started_at)}</td>
       <td>${s.ended_at ? formatTime(s.ended_at) : '-'}</td>
-      <td>${s.posts_scrolled}</td>
-      <td>${s.posts_matched}</td>
-      <td style="font-weight: 600;">${s.posts_reacted}</td>
-      <td>${s.posts_skipped}</td>
+      <td>${Number(s.posts_scrolled) || 0}</td>
+      <td>${Number(s.posts_matched) || 0}</td>
+      <td style="font-weight: 600;">${Number(s.posts_reacted) || 0}</td>
+      <td>${Number(s.posts_skipped) || 0}</td>
       <td>
         <span class="badge badge-${s.status === 'completed' ? 'running' : s.status === 'error' ? 'error' : 'idle'}">
-          <span class="dot"></span> ${s.status}
+          <span class="dot"></span> ${escapeHtml(s.status)}
         </span>
       </td>
     </tr>
@@ -411,4 +414,14 @@ function escapeHtml(str) {
 // ── Init ────────────────────────────────────────────────────────────
 
 refreshDashboard();
-pollInterval = setInterval(refreshDashboard, 5000); // Poll every 5s
+pollInterval = setInterval(refreshDashboard, 5000);
+
+// Pause polling when tab is hidden (saves server load)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearInterval(pollInterval);
+  } else {
+    refreshDashboard();
+    pollInterval = setInterval(refreshDashboard, 5000);
+  }
+});

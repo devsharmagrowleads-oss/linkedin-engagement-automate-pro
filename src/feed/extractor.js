@@ -68,18 +68,17 @@ async function checkIfPromoted(postLocator) {
  * Extract all visible posts from the current feed view
  */
 async function extractVisiblePosts(page) {
-  const posts = [];
   const postLocators = page.locator(SELECTORS.feedPost);
   const count = await postLocators.count();
 
-  for (let i = 0; i < count; i++) {
-    const post = await extractPost(postLocators.nth(i));
-    if (post) {
-      posts.push(post);
-    }
-  }
+  // Extract all posts in parallel (each is independent DOM read)
+  const results = await Promise.allSettled(
+    Array.from({ length: count }, (_, i) => extractPost(postLocators.nth(i)))
+  );
 
-  return posts;
+  return results
+    .filter(r => r.status === 'fulfilled' && r.value !== null)
+    .map(r => r.value);
 }
 
 module.exports = { extractPost, extractVisiblePosts };

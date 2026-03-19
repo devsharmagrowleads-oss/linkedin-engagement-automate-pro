@@ -5,7 +5,7 @@
  * Returns a value clustered around the mean with standard deviation
  */
 function gaussianRandom(mean, stdDev) {
-  const u1 = Math.random();
+  const u1 = Math.random() || 1e-10; // Avoid Math.log(0) which produces -Infinity
   const u2 = Math.random();
   const normal = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   return mean + normal * stdDev;

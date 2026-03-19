@@ -46,21 +46,29 @@ async function runSession() {
   log.info(`LinkedIn Auto-React Session (${windowName})`);
   log.info(`========================================\n`);
 
-  // Concurrent session guard
-  if (fs.existsSync(config.lockfilePath)) {
-    const lockAge = Date.now() - fs.statSync(config.lockfilePath).mtimeMs;
-    if (lockAge < 30 * 60 * 1000) { // Lock is less than 30 min old
-      log.warn('Another session is running (lockfile exists). Exiting.');
-      process.exit(0);
-    }
-    // Stale lock, remove it
-    fs.unlinkSync(config.lockfilePath);
-  }
-
-  // Create lockfile
+  // Concurrent session guard (atomic lockfile creation with O_EXCL)
   const lockDir = path.dirname(config.lockfilePath);
   if (!fs.existsSync(lockDir)) fs.mkdirSync(lockDir, { recursive: true });
-  fs.writeFileSync(config.lockfilePath, `${process.pid}`);
+
+  try {
+    // Check for stale lock first
+    if (fs.existsSync(config.lockfilePath)) {
+      const lockAge = Date.now() - fs.statSync(config.lockfilePath).mtimeMs;
+      if (lockAge < 30 * 60 * 1000) {
+        log.warn('Another session is running (lockfile exists). Exiting.');
+        return 0;
+      }
+      fs.unlinkSync(config.lockfilePath);
+    }
+    // Atomic create — fails if another process created it between check and here
+    fs.writeFileSync(config.lockfilePath, `${process.pid}`, { flag: 'wx' });
+  } catch (err) {
+    if (err.code === 'EEXIST') {
+      log.warn('Another session just started (lock race). Exiting.');
+      return 0;
+    }
+    throw err;
+  }
 
   // Random jitter (0 to maxJitterMinutes)
   if (windowName !== 'manual' && !process.env.FORCE_NO_JITTER) {
@@ -81,14 +89,14 @@ async function runSession() {
   if (remaining <= 0) {
     log.info(`Daily target already met (${progress.achieved}/${dailyTarget.target}). Skipping session.`);
     cleanup();
-    process.exit(0);
+    return 0;
   }
 
   // Calculate session target (distribute across remaining windows)
   const sessionsToday = db.getSessionsToday();
   const completedSessions = sessionsToday.filter(s => s.status === 'completed').length;
-  const totalSessions = 3;
-  const remainingSessions = Math.max(1, totalSessions - completedSessions);
+  const windowCount = [config.morningWindow, config.afternoonWindow, config.eveningWindow].filter(Boolean).length;
+  const remainingSessions = Math.max(1, windowCount - completedSessions);
   const sessionTarget = Math.ceil(remaining / remainingSessions);
 
   log.info(`Daily target: ${dailyTarget.target} | Already done: ${progress.achieved} | This session: ~${sessionTarget}`);
@@ -121,12 +129,11 @@ async function runSession() {
     // Validate session
     const isValid = await validateSession(page);
     if (!isValid) {
-      log.error('LinkedIn session is expired. Please run "npm run login" first.');
+      log.error('LinkedIn session is expired. Please click "Login to LinkedIn" in the dashboard.');
       stats.status = 'error';
       stats.errorMessage = 'Session expired';
-      db.endSession(sessionId, stats);
-      cleanup();
-      process.exit(2);
+      // endSession will be called in the finally block
+      return 2;
     }
 
     let reactedThisSession = 0;
@@ -204,21 +211,20 @@ async function runSession() {
       }
     } catch {} // ignore screenshot errors
 
-    // Determine exit code based on error type
     const msg = (err.message || '').toLowerCase();
     if (msg.includes('captcha') || msg.includes('challenge')) {
       log.warn('CAPTCHA detected — extending cooldown for next session');
-      db.endSession(sessionId, stats);
-      cleanup();
-      process.exit(1);
     }
   } finally {
+    // Single endSession call — always runs, never duplicated
     db.endSession(sessionId, stats);
     if (context) {
       await context.close().catch(() => {});
     }
     cleanup();
   }
+
+  return stats.status === 'error' ? 1 : 0;
 }
 
 function printSessionSummary(sessionId, stats, dailyTarget) {
@@ -256,8 +262,17 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+// Handle unhandled rejections
+process.on('unhandledRejection', (err) => {
+  log.error(`Unhandled rejection: ${err.message || err}`);
+  cleanup();
+  process.exit(1);
+});
+
 // Run
-runSession().catch(err => {
+runSession().then(code => {
+  process.exit(code || 0);
+}).catch(err => {
   log.error(`Fatal error: ${err.message}`);
   cleanup();
   process.exit(1);

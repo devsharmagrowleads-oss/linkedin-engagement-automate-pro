@@ -113,6 +113,51 @@ const stmts = {
   pruneOldReactions: db.prepare(`
     DELETE FROM reactions WHERE reacted_at < datetime('now', '-30 days')
   `),
+
+  // API queries (previously inline in api.js)
+  getLastError: db.prepare(`
+    SELECT error_message FROM sessions
+    WHERE status = 'error' ORDER BY started_at DESC LIMIT 1
+  `),
+
+  getStatsByDays: db.prepare(`
+    SELECT
+      date(reacted_at) as day,
+      COUNT(*) as total,
+      SUM(CASE WHEN reaction_type = 'like' THEN 1 ELSE 0 END) as likes,
+      SUM(CASE WHEN reaction_type = 'celebrate' THEN 1 ELSE 0 END) as celebrates,
+      SUM(CASE WHEN reaction_type = 'insightful' THEN 1 ELSE 0 END) as insightfuls,
+      SUM(CASE WHEN reaction_type = 'love' THEN 1 ELSE 0 END) as loves,
+      SUM(CASE WHEN reaction_type = 'support' THEN 1 ELSE 0 END) as supports,
+      SUM(CASE WHEN reaction_type = 'funny' THEN 1 ELSE 0 END) as funnys
+    FROM reactions
+    WHERE reacted_at >= date('now', '-' || ? || ' days')
+    GROUP BY date(reacted_at)
+    ORDER BY day DESC
+  `),
+
+  getMatchLevelsByDays: db.prepare(`
+    SELECT match_level, COUNT(*) as count
+    FROM reactions
+    WHERE reacted_at >= date('now', '-' || ? || ' days')
+    GROUP BY match_level
+  `),
+
+  getReactionsPaginated: db.prepare(`
+    SELECT * FROM reactions ORDER BY reacted_at DESC LIMIT ? OFFSET ?
+  `),
+
+  getReactionsCount: db.prepare(`
+    SELECT COUNT(*) as count FROM reactions WHERE reacted_at >= date('now', '-30 days')
+  `),
+
+  getRecentSessions: db.prepare(`
+    SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?
+  `),
+
+  getErrorSessions: db.prepare(`
+    SELECT * FROM sessions WHERE status = 'error' ORDER BY started_at DESC LIMIT 20
+  `),
 };
 
 function getTodayStr() {
@@ -200,8 +245,37 @@ function pruneOldData() {
   }
 }
 
+// API query functions (encapsulated — api.js should never use db directly)
+function getLastError() {
+  return stmts.getLastError.get();
+}
+
+function getStatsByDays(days) {
+  return stmts.getStatsByDays.all(days);
+}
+
+function getMatchLevelsByDays(days) {
+  return stmts.getMatchLevelsByDays.all(days);
+}
+
+function getReactionsPaginated(limit, offset) {
+  return stmts.getReactionsPaginated.all(limit, offset);
+}
+
+function getReactionsCount() {
+  const row = stmts.getReactionsCount.get();
+  return row ? row.count : 0;
+}
+
+function getRecentSessions(limit) {
+  return stmts.getRecentSessions.all(limit);
+}
+
+function getErrorSessions() {
+  return stmts.getErrorSessions.all();
+}
+
 module.exports = {
-  db,
   startSession,
   endSession,
   logReaction,
@@ -212,4 +286,12 @@ module.exports = {
   getSessionSummary,
   pruneOldData,
   getTodayStr,
+  // API queries
+  getLastError,
+  getStatsByDays,
+  getMatchLevelsByDays,
+  getReactionsPaginated,
+  getReactionsCount,
+  getRecentSessions,
+  getErrorSessions,
 };

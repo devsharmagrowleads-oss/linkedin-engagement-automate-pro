@@ -6,8 +6,17 @@ const log = require('../utils/logger');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(express.json());
+// Security: limit request body size
+app.use(express.json({ limit: '10kb' }));
+
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Error screenshots served as static files
@@ -22,7 +31,14 @@ app.use((req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
+// Global error handler
+app.use((err, req, res, next) => {
+  log.error(`API error: ${err.message}`);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// Bind to localhost only (security: prevents LAN exposure)
+app.listen(PORT, '127.0.0.1', () => {
   log.info(`Dashboard running at http://localhost:${PORT}`);
   log.info('Open this URL in your browser to manage LinkedIn Auto-React');
 });

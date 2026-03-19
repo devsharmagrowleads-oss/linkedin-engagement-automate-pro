@@ -19,15 +19,23 @@ async function manualLogin() {
     log.info('Waiting for you to complete login...');
     log.info('(The browser will close automatically once login is detected)\n');
 
-    // Poll for successful login by checking URL
+    // Poll for successful login by checking URL (10-minute timeout)
+    const LOGIN_TIMEOUT = 10 * 60 * 1000;
+    const startTime = Date.now();
     let loggedIn = false;
     while (!loggedIn) {
+      if (Date.now() - startTime > LOGIN_TIMEOUT) {
+        log.warn('Login timed out after 10 minutes. Please try again.');
+        break;
+      }
       await page.waitForTimeout(3000);
       const url = page.url();
       if (url.includes('/feed') || url.includes('/mynetwork') || url.includes('/messaging')) {
         loggedIn = true;
       }
     }
+
+    if (!loggedIn) return;
 
     // Validate the session
     const valid = await validateSession(page);

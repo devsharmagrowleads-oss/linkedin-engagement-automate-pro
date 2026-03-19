@@ -9,8 +9,8 @@ async function validateSession(page) {
       timeout: 30000,
     });
 
-    // Wait a moment for any redirects
-    await page.waitForTimeout(3000);
+    // Wait for network to settle instead of a fixed timeout
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
 
     const url = page.url();
 
