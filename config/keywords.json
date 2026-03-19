@@ -1,0 +1,24 @@
+{
+  "primary": [
+    "lead generation",
+    "B2B sales",
+    "cold outreach",
+    "sales automation",
+    "growth strategy"
+  ],
+  "secondary": [
+    "business development",
+    "sales tips",
+    "marketing automation",
+    "startup growth",
+    "SaaS"
+  ],
+  "reactionMap": {
+    "celebrate": ["new role", "promotion", "excited to announce", "joined", "milestone", "anniversary", "congratulations", "new position", "thrilled to share"],
+    "insightful": ["trend", "industry", "research", "data shows", "study", "report", "analysis", "framework", "insights", "strategy"],
+    "love": ["grateful", "thankful", "journey", "personal story", "family", "blessed", "appreciate", "incredible", "amazing team"],
+    "support": ["tough", "challenge", "difficult", "struggle", "mental health", "layoff", "let go", "laid off", "tough times"],
+    "funny": []
+  },
+  "fuzzyThreshold": 0.3
+}
