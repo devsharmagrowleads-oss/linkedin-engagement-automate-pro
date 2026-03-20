@@ -113,16 +113,11 @@ body {
 }
 
 .sidebar-logo {
-  width: 32px;
-  height: 32px;
-  background: var(--blue-600);
-  border-radius: var(--radius);
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 14px;
-  color: white;
   flex-shrink: 0;
 }
 
