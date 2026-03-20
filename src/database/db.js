@@ -35,6 +35,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     post_urn TEXT NOT NULL UNIQUE,
+    post_url TEXT DEFAULT '',
     author TEXT,
     content_snippet TEXT,
     reaction_type TEXT NOT NULL,
@@ -54,6 +55,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reactions_date ON reactions(reacted_at);
   CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 `);
+
+// Migration: add post_url column if it doesn't exist (for existing databases)
+try {
+  db.exec(`ALTER TABLE reactions ADD COLUMN post_url TEXT DEFAULT ''`);
+} catch (e) {
+  // Column already exists — ignore
+}
 
 // Prepared statements
 const stmts = {
@@ -75,8 +83,8 @@ const stmts = {
 
   // Reactions
   insertReaction: db.prepare(`
-    INSERT OR IGNORE INTO reactions (session_id, post_urn, author, content_snippet, reaction_type, match_level, matched_keyword)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO reactions (session_id, post_urn, post_url, author, content_snippet, reaction_type, match_level, matched_keyword)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   isAlreadyReacted: db.prepare(`
@@ -190,8 +198,8 @@ function endSession(sessionId, stats) {
 }
 
 // Wrap insert + increment in a transaction (single disk write, atomic)
-const _logReactionTx = db.transaction((sessionId, urn, author, snippet, reactionType, matchLevel, matchedKeyword) => {
-  const result = stmts.insertReaction.run(sessionId, urn, author, snippet, reactionType, matchLevel, matchedKeyword);
+const _logReactionTx = db.transaction((sessionId, urn, postUrl, author, snippet, reactionType, matchLevel, matchedKeyword) => {
+  const result = stmts.insertReaction.run(sessionId, urn, postUrl, author, snippet, reactionType, matchLevel, matchedKeyword);
   if (result.changes > 0) {
     stmts.incrementAchieved.run(getTodayStr());
     return true;
@@ -203,6 +211,7 @@ function logReaction(sessionId, post, reactionType, matchLevel, matchedKeyword) 
   return _logReactionTx(
     sessionId,
     post.urn,
+    post.postUrl || '',
     post.author || 'Unknown',
     (post.text || '').substring(0, 200),
     reactionType,

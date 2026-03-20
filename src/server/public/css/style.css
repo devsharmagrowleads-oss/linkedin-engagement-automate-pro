@@ -452,6 +452,8 @@ tbody td {
 
 tbody tr { transition: background 0.1s ease; }
 tbody tr:hover { background: var(--bg-hover); }
+tr.clickable-row { cursor: pointer; }
+tr.clickable-row:hover { background: rgba(59, 130, 246, 0.08); }
 tbody tr:last-child td { border-bottom: none; }
 
 /* ── Badges / Status Pills ────────────────────────────────────── */

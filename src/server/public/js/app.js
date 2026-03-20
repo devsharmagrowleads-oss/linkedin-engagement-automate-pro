@@ -180,7 +180,7 @@ function renderRecentActivity(reactions) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No reactions yet</td></tr>';
     return;
   }
-  tbody.innerHTML = reactions.map(r => `<tr>
+  tbody.innerHTML = reactions.map(r => `<tr class="clickable-row" onclick="openLinkedInPost('${escapeAttr(r.post_url || r.post_urn)}')" title="Click to view post on LinkedIn">
     <td>${formatTime(r.reacted_at)}</td>
     <td>${escapeHtml(r.author)}</td>
     <td><span class="reaction-badge reaction-${r.reaction_type}">${r.reaction_type}</span></td>
@@ -244,7 +244,7 @@ async function loadMoreReactions() {
 
 function renderAllReactions(reactions, append) {
   const tbody = document.getElementById('allReactions');
-  const html = reactions.map(r => `<tr>
+  const html = reactions.map(r => `<tr class="clickable-row" onclick="openLinkedInPost('${escapeAttr(r.post_url || r.post_urn)}')" title="Click to view post on LinkedIn">
     <td>${formatTime(r.reacted_at)}</td>
     <td>${escapeHtml(r.author)}</td>
     <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);">${escapeHtml(r.content_snippet || '')}</td>
@@ -398,6 +398,24 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str || '';
   return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+function openLinkedInPost(url) {
+  if (!url) {
+    toast('Post link not available', 'error');
+    return;
+  }
+  // Ensure it's a full URL
+  if (url.startsWith('/')) {
+    url = 'https://www.linkedin.com' + url;
+  } else if (!url.startsWith('http')) {
+    url = 'https://www.linkedin.com/feed/update/' + encodeURIComponent(url);
+  }
+  window.open(url, '_blank');
 }
 
 // ── SSE Live Log ────────────────────────────────────────────────────

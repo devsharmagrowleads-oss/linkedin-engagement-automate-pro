@@ -32,9 +32,21 @@ async function extractPost(postLocator) {
 
     if (!hasReactBtn) return null;
 
-    // Extract text content from the post
+    // Extract text content and post URL from the post
     // Since LinkedIn obfuscates classes, we get innerText and parse it
     const postData = await postLocator.evaluate(el => {
+      // Try to find the permalink to the post (usually the timestamp link)
+      // LinkedIn post links contain /feed/update/ or /posts/ in the URL
+      let postUrl = '';
+      const links = el.querySelectorAll('a[href]');
+      for (const link of links) {
+        const href = link.getAttribute('href') || '';
+        if (href.includes('/feed/update/') || href.includes('/posts/')) {
+          postUrl = href.split('?')[0]; // Strip query params
+          break;
+        }
+      }
+
       const text = (el.innerText || '').trim();
       const lines = text.split('\n').filter(l => l.trim());
 
@@ -50,8 +62,9 @@ async function extractPost(postLocator) {
       for (let i = 0; i < Math.min(lines.length, 10); i++) {
         const line = lines[i].trim();
 
-        // Skip hidden labels
+        // Skip hidden labels and LinkedIn UI text
         if (line === 'Feed post' || line === '…' || line === '... more') continue;
+        if (/^(Suggested|Promoted|Sponsored|Follow)$/i.test(line)) continue;
 
         // Context line (e.g. "GenAI Works likes this") — skip, real author is next
         const ctxMatch = line.match(contextPattern);
@@ -84,7 +97,7 @@ async function extractPost(postLocator) {
       }
       postText = contentLines.join(' ').substring(0, 1000);
 
-      return { author, postText };
+      return { author, postText, postUrl };
     });
 
     if (!postData) return null;
@@ -96,6 +109,7 @@ async function extractPost(postLocator) {
       urn: urn.trim(),
       author: (postData.author || 'Unknown').trim(),
       text: cleanText,
+      postUrl: (postData.postUrl || '').trim(),
     };
   } catch (err) {
     // Silently skip posts that can't be extracted
