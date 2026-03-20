@@ -16,6 +16,7 @@ async function scrollFeed(page, maxMinutes, onPostsFound, shouldStop) {
   const maxMs = maxMinutes * 60 * 1000;
   const seenUrns = new Set();
   let totalScrolled = 0;
+  let noNewPostStreak = 0;
 
   log.info(`Starting feed scroll (max ${maxMinutes} minutes)...`);
 
@@ -28,6 +29,9 @@ async function scrollFeed(page, maxMinutes, onPostsFound, shouldStop) {
 
     // Extract currently visible posts
     const posts = await extractVisiblePosts(page);
+    if (totalScrolled === 0 && posts.length === 0) {
+      log.warn('No posts found on first scroll — selectors may need updating');
+    }
     const newPosts = posts.filter(p => !seenUrns.has(p.urn));
 
     for (const post of newPosts) {
@@ -35,6 +39,21 @@ async function scrollFeed(page, maxMinutes, onPostsFound, shouldStop) {
     }
 
     totalScrolled += newPosts.length;
+
+    // Track consecutive scrolls with no new posts
+    if (newPosts.length === 0) {
+      noNewPostStreak++;
+      // If stuck for 5+ scrolls, do a bigger scroll to skip past a sticky section
+      if (noNewPostStreak >= 5) {
+        log.info('No new posts for a while, scrolling further...');
+        await page.mouse.wheel(0, 1500);
+        await sleep(humanDelay(1000, 2000));
+        noNewPostStreak = 0;
+        continue;
+      }
+    } else {
+      noNewPostStreak = 0;
+    }
 
     // Notify about new posts
     if (newPosts.length > 0) {
@@ -44,12 +63,12 @@ async function scrollFeed(page, maxMinutes, onPostsFound, shouldStop) {
     // Human-like scroll
     await humanScroll(page);
 
-    // Wait between scroll batches
-    await sleep(humanDelay(1500, 4000));
+    // Wait between scroll batches (shorter delays to find more posts)
+    await sleep(humanDelay(1000, 3000));
 
-    // Occasionally do a longer pause (simulating reading an interesting post)
-    if (Math.random() < 0.15) {
-      await sleep(humanDelay(5000, 12000));
+    // Occasionally do a longer pause (simulating reading), but less often
+    if (Math.random() < 0.10) {
+      await sleep(humanDelay(3000, 8000));
     }
   }
 

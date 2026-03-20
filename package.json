@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "daemon": "node src/index.js --daemon",
     "dashboard": "node src/server/server.js",
     "login": "node src/login.js"
   },

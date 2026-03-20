@@ -6,6 +6,7 @@ const { launchBrowser } = require('./browser/launch');
 const { validateSession } = require('./browser/session');
 const { scrollFeed } = require('./feed/scroller');
 const { reactToPost } = require('./feed/reactor');
+const { validateSelectors } = require('./feed/selectors');
 const { KeywordMatcher } = require('./matching/keywords');
 const { ReactionSelector } = require('./matching/reactions');
 const { humanDelay, sleep, shouldSkip } = require('./behavior/human');
@@ -97,7 +98,9 @@ async function runSession() {
   const completedSessions = sessionsToday.filter(s => s.status === 'completed').length;
   const windowCount = [config.morningWindow, config.afternoonWindow, config.eveningWindow].filter(Boolean).length;
   const remainingSessions = Math.max(1, windowCount - completedSessions);
-  const sessionTarget = Math.ceil(remaining / remainingSessions);
+  // Ensure each session does at least its fair share of the daily target
+  const minPerSession = Math.ceil(dailyTarget.target / Math.max(1, windowCount));
+  const sessionTarget = Math.max(minPerSession, Math.ceil(remaining / remainingSessions));
 
   log.info(`Daily target: ${dailyTarget.target} | Already done: ${progress.achieved} | This session: ~${sessionTarget}`);
   log.warn('Automated session starting. Avoid LinkedIn in your browser for the next ~15 minutes.\n');
@@ -132,14 +135,22 @@ async function runSession() {
       log.error('LinkedIn session is expired. Please click "Login to LinkedIn" in the dashboard.');
       stats.status = 'error';
       stats.errorMessage = 'Session expired';
-      // endSession will be called in the finally block
       return 2;
+    }
+
+    // Validate that LinkedIn selectors still work
+    const selectorCheck = await validateSelectors(page);
+    if (!selectorCheck.valid) {
+      stats.status = 'error';
+      stats.errorMessage = 'Selectors outdated — LinkedIn DOM may have changed';
+      return 3;
     }
 
     let reactedThisSession = 0;
 
-    // Randomize max session duration (within bounds)
-    const sessionMaxMinutes = config.maxSessionMinutes - 5 + Math.floor(Math.random() * 10);
+    // Randomize max session duration — vary by ±20% around the configured value
+    const variance = Math.floor(config.maxSessionMinutes * 0.2);
+    const sessionMaxMinutes = Math.max(10, config.maxSessionMinutes - variance + Math.floor(Math.random() * (variance * 2 + 1)));
 
     // Scroll feed and react to matching posts
     await scrollFeed(
@@ -269,11 +280,44 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
+// ── Daemon mode ──────────────────────────────────────────────────────
+// Usage: node src/index.js --daemon
+// Stays alive, checks every 5 minutes if we're inside a session window,
+// and runs a session when the time is right.
+
+async function daemon() {
+  log.info('Daemon mode started. Will auto-trigger sessions during configured windows.');
+  const CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+  while (true) {
+    const window = getCurrentWindow();
+    if (window !== 'manual') {
+      log.info(`Inside "${window}" window — checking if session needed...`);
+      const progress = db.getDailyProgress();
+      const target = db.ensureDailyTarget(config.dailyTargetMin, config.dailyTargetMax);
+      if (progress.achieved < target.target) {
+        await runSession();
+      } else {
+        log.info(`Daily target already met (${progress.achieved}/${target.target}). Sleeping.`);
+      }
+    }
+    await sleep(CHECK_INTERVAL);
+  }
+}
+
 // Run
-runSession().then(code => {
-  process.exit(code || 0);
-}).catch(err => {
-  log.error(`Fatal error: ${err.message}`);
-  cleanup();
-  process.exit(1);
-});
+if (process.argv.includes('--daemon')) {
+  daemon().catch(err => {
+    log.error(`Daemon fatal error: ${err.message}`);
+    cleanup();
+    process.exit(1);
+  });
+} else {
+  runSession().then(code => {
+    process.exit(code || 0);
+  }).catch(err => {
+    log.error(`Fatal error: ${err.message}`);
+    cleanup();
+    process.exit(1);
+  });
+}

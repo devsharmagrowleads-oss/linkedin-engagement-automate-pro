@@ -8,9 +8,9 @@ function loadKeywords() {
   const raw = fs.readFileSync(KEYWORDS_PATH, 'utf-8');
   const config = JSON.parse(raw);
 
-  if (!Array.isArray(config.primary) || config.primary.length === 0) {
-    throw new Error('keywords.json must have a non-empty "primary" array');
-  }
+  // Ensure arrays exist (but allow empty — reactToAll mode and KeywordMatcher handle it)
+  if (!Array.isArray(config.primary)) config.primary = [];
+  if (!Array.isArray(config.secondary)) config.secondary = [];
 
   return config;
 }

@@ -3,272 +3,363 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LinkedIn Auto-React</title>
+  <meta name="theme-color" content="#0c0e1a">
+  <title>Growleads Dashboard</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <div class="app">
-    <header>
-      <h1>
-        <span class="logo">LI</span>
-        LinkedIn Auto-React
-      </h1>
-      <div id="statusBadge" class="badge badge-idle">
-        <span class="dot"></span>
-        <span id="statusText">Idle</span>
+  <div class="app-layout">
+
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-logo">G</div>
+        <div class="sidebar-brand-text">Growleads</div>
       </div>
-    </header>
+      <nav class="sidebar-nav">
+        <div class="sidebar-section-label">Overview</div>
+        <button class="sidebar-item active" data-page="dashboard">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Dashboard
+        </button>
+        <button class="sidebar-item" data-page="reactions">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          Reactions
+        </button>
+        <button class="sidebar-item" data-page="sessions">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Sessions
+        </button>
 
-    <!-- Navigation -->
-    <div class="tabs">
-      <button class="tab active" data-page="dashboard">Dashboard</button>
-      <button class="tab" data-page="reactions">Reactions</button>
-      <button class="tab" data-page="keywords">Keywords</button>
-      <button class="tab" data-page="settings">Settings</button>
-      <button class="tab" data-page="sessions">Sessions</button>
-    </div>
-
-    <!-- ═══ Dashboard Page ═══ -->
-    <div id="page-dashboard" class="page active">
-      <!-- Login banner (shown when session expired or first time) -->
-      <div id="loginBanner" class="card" style="margin-bottom: 16px; display: none; align-items: center; gap: 16px; background: rgba(245, 158, 11, 0.1); border-color: var(--warning);">
-        <div style="font-size: 24px;">&#9888;</div>
-        <div style="flex: 1;">
-          <div style="font-weight: 600; margin-bottom: 4px;">LinkedIn Login Required</div>
-          <div class="banner-text" style="font-size: 13px; color: var(--text-muted);">Click "Login to LinkedIn" to connect your account.</div>
-        </div>
-        <button class="btn btn-primary" onclick="openLogin()">Login to LinkedIn</button>
+        <div class="sidebar-section-label">Configuration</div>
+        <button class="sidebar-item" data-page="keywords">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+          Keywords
+        </button>
+        <button class="sidebar-item" data-page="settings">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="sidebar-item" onclick="openLogin()">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+          Login to LinkedIn
+        </button>
       </div>
+    </aside>
 
-      <!-- Control buttons -->
-      <div class="card" style="margin-bottom: 16px;">
-        <div class="btn-group">
-          <button id="btnStart" class="btn btn-success" onclick="startSession()">Start Session</button>
-          <button id="btnStop" class="btn btn-danger" onclick="stopSession()" disabled>Stop Session</button>
-          <button class="btn btn-ghost" onclick="openLogin()">Login to LinkedIn</button>
-        </div>
-      </div>
+    <!-- ── Main Content ── -->
+    <main class="main-content">
 
-      <!-- Stats cards -->
-      <div class="grid grid-4">
-        <div class="card">
-          <div class="card-title">Today's Reactions</div>
-          <div class="card-value" id="todayCount">0</div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="todayProgress" style="width: 0%"></div>
-          </div>
-          <div class="card-subtitle" id="todayTarget">Target: 0</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Sessions Today</div>
-          <div class="card-value" id="sessionsCount">0</div>
-          <div class="card-subtitle" id="sessionsDetail">0 completed</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Total Reactions</div>
-          <div class="card-value" id="totalReactions">0</div>
-          <div class="card-subtitle">all time</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Status</div>
-          <div class="card-value" id="currentStatus" style="font-size: 1.2rem;">Idle</div>
-          <div class="card-subtitle" id="statusDetail">Ready to start</div>
-        </div>
-      </div>
-
-      <!-- Charts row -->
-      <div class="grid grid-2">
-        <div class="card">
-          <div class="card-title">Last 7 Days</div>
-          <div class="chart-bars" id="weekChart"></div>
-        </div>
-        <div class="card">
-          <div class="card-title">Reaction Types (7 days)</div>
-          <div id="reactionTypesChart" style="padding: 10px 0;"></div>
-        </div>
-      </div>
-
-      <!-- Recent activity -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Recent Activity</div>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Author</th>
-                <th>Reaction</th>
-                <th>Match</th>
-                <th>Keyword</th>
-              </tr>
-            </thead>
-            <tbody id="recentActivity"></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══ Reactions Page ═══ -->
-    <div id="page-reactions" class="page">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">All Reactions</div>
-          <button class="btn btn-ghost" onclick="loadReactions()">Refresh</button>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Author</th>
-                <th>Content</th>
-                <th>Reaction</th>
-                <th>Match Level</th>
-                <th>Keyword</th>
-              </tr>
-            </thead>
-            <tbody id="allReactions"></tbody>
-          </table>
-        </div>
-        <div style="padding: 12px; text-align: center;">
-          <button class="btn btn-ghost" id="loadMoreBtn" onclick="loadMoreReactions()">Load More</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══ Keywords Page ═══ -->
-    <div id="page-keywords" class="page">
-      <div class="grid grid-2">
-        <div class="card">
-          <div class="section-title">Primary Keywords</div>
-          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
-            Posts matching these keywords will get reactions (strict match first, then fuzzy).
-          </p>
-          <div id="primaryTags" class="tags-container">
-            <input type="text" class="tags-input" placeholder="Type keyword and press Enter..." onkeydown="handleTagInput(event, 'primary')">
+      <!-- ═══ Dashboard Page ═══ -->
+      <div id="page-dashboard" class="page active">
+        <div class="page-header">
+          <div class="page-header-top">
+            <div>
+              <div class="page-title">Dashboard</div>
+              <div class="page-subtitle">Monitor your LinkedIn automation activity</div>
+            </div>
+            <div id="statusBadge" class="badge badge-idle">
+              <span class="dot"></span>
+              <span id="statusText">Idle</span>
+            </div>
           </div>
         </div>
-        <div class="card">
-          <div class="section-title">Secondary Keywords</div>
-          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
-            Used when primary keywords don't find enough posts to fill the daily target.
-          </p>
-          <div id="secondaryTags" class="tags-container">
-            <input type="text" class="tags-input" placeholder="Type keyword and press Enter..." onkeydown="handleTagInput(event, 'secondary')">
+
+        <div class="filter-bar">
+          <div class="btn-group">
+            <button id="btnStart" class="btn btn-success" onclick="startSession()">Start Session</button>
+            <button id="btnStop" class="btn btn-danger" onclick="stopSession()" disabled>Stop</button>
+          </div>
+        </div>
+
+        <div class="page-body">
+          <!-- Login Banner -->
+          <div id="loginBanner" class="login-banner">
+            <div class="login-banner-icon">&#9888;&#65039;</div>
+            <div class="login-banner-content">
+              <div class="login-banner-title">LinkedIn Login Required</div>
+              <div class="login-banner-text banner-text">Click "Login to LinkedIn" in the sidebar to connect.</div>
+            </div>
+            <button class="btn btn-primary" onclick="openLogin()">Login</button>
+          </div>
+
+          <!-- Live Log -->
+          <div id="liveSessionCard" class="live-log">
+            <div class="live-log-header">
+              <div class="live-log-dot"></div>
+              <div class="live-log-title">Live Session</div>
+            </div>
+            <pre id="liveSessionLog" class="live-log-pre"></pre>
+          </div>
+
+          <!-- Stats -->
+          <div class="stat-grid">
+            <div class="stat-card">
+              <div class="stat-label">Today's Reactions</div>
+              <div class="stat-value" id="todayCount">0</div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="todayProgress" style="width: 0%"></div>
+              </div>
+              <div class="stat-detail" id="todayTarget">Target: 0</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Sessions Today</div>
+              <div class="stat-value" id="sessionsCount">0</div>
+              <div class="stat-detail" id="sessionsDetail">0 completed</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Total (7 days)</div>
+              <div class="stat-value" id="totalReactions">0</div>
+              <div class="stat-detail">last 7 days</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Status</div>
+              <div class="stat-value" id="currentStatus" style="font-size: 18px;">Idle</div>
+              <div class="stat-detail" id="statusDetail">Ready to start</div>
+            </div>
+          </div>
+
+          <!-- Charts -->
+          <div class="grid-2" style="margin-bottom: 24px;">
+            <div class="card card-padded">
+              <div class="chart-section-title" style="margin-bottom: 16px;">Last 7 Days</div>
+              <div class="chart-bars" id="weekChart"></div>
+            </div>
+            <div class="card card-padded">
+              <div class="chart-section-title" style="margin-bottom: 16px;">Reaction Types</div>
+              <div id="reactionTypesChart"></div>
+            </div>
+          </div>
+
+          <!-- Recent Activity -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Recent Activity</div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Author</th>
+                    <th>Reaction</th>
+                    <th>Match</th>
+                    <th>Keyword</th>
+                  </tr>
+                </thead>
+                <tbody id="recentActivity"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="card" style="margin-top: 16px;">
-        <div class="section-title">Reaction Keyword Map</div>
-        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-          When a post matches these keywords, the system uses the specific reaction type instead of default "Like".
-        </p>
-        <div class="grid grid-2">
-          <div class="form-group">
-            <label>Celebrate (for promotions, achievements)</label>
-            <textarea id="map-celebrate" rows="3" placeholder="new role, promotion, excited to announce..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Insightful (for thought leadership, research)</label>
-            <textarea id="map-insightful" rows="3" placeholder="trend, industry, research, data shows..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Love (for gratitude, personal stories)</label>
-            <textarea id="map-love" rows="3" placeholder="grateful, thankful, journey..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Support (for challenges, tough times)</label>
-            <textarea id="map-support" rows="3" placeholder="tough, challenge, struggle..."></textarea>
+      <!-- ═══ Reactions Page ═══ -->
+      <div id="page-reactions" class="page">
+        <div class="page-header">
+          <div class="page-title">Reactions</div>
+          <div class="page-subtitle">All reactions logged by the system</div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">All Reactions</div>
+              <button class="btn btn-secondary" onclick="loadReactions()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Author</th>
+                    <th>Content</th>
+                    <th>Reaction</th>
+                    <th>Match</th>
+                    <th>Keyword</th>
+                  </tr>
+                </thead>
+                <tbody id="allReactions"></tbody>
+              </table>
+            </div>
+            <div style="padding: 12px 16px; text-align: center; border-top: 1px solid var(--border-color);">
+              <button class="btn btn-ghost" id="loadMoreBtn" onclick="loadMoreReactions()">Load More</button>
+            </div>
           </div>
         </div>
-        <div class="form-group">
-          <label>Fuzzy Match Threshold (0 = exact, 1 = match anything)</label>
-          <input type="number" id="fuzzyThreshold" min="0" max="1" step="0.05" value="0.3">
-        </div>
-        <button class="btn btn-primary" onclick="saveKeywords()">Save Keywords</button>
       </div>
-    </div>
 
-    <!-- ═══ Settings Page ═══ -->
-    <div id="page-settings" class="page">
-      <div class="grid grid-2">
-        <div class="card">
-          <div class="section-title">Session Windows</div>
-          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-            Time windows when automated sessions can run (24h format).
-          </p>
-          <div class="form-group">
-            <label>Morning Window</label>
-            <input type="text" id="set-MORNING_WINDOW" placeholder="08:00-10:00">
-          </div>
-          <div class="form-group">
-            <label>Afternoon Window</label>
-            <input type="text" id="set-AFTERNOON_WINDOW" placeholder="12:00-14:00">
-          </div>
-          <div class="form-group">
-            <label>Evening Window</label>
-            <input type="text" id="set-EVENING_WINDOW" placeholder="17:00-19:00">
-          </div>
+      <!-- ═══ Keywords Page ═══ -->
+      <div id="page-keywords" class="page">
+        <div class="page-header">
+          <div class="page-title">Keywords</div>
+          <div class="page-subtitle">Configure keyword matching and reaction mapping</div>
         </div>
-        <div class="card">
-          <div class="section-title">Targets & Timing</div>
-          <div class="form-group">
-            <label>Min Daily Reactions</label>
-            <input type="number" id="set-DAILY_TARGET_MIN" placeholder="45">
-          </div>
-          <div class="form-group">
-            <label>Max Daily Reactions</label>
-            <input type="number" id="set-DAILY_TARGET_MAX" placeholder="55">
-          </div>
-          <div class="form-group">
-            <label>Max Jitter (minutes)</label>
-            <input type="number" id="set-MAX_JITTER_MINUTES" placeholder="30">
-          </div>
-          <div class="form-group">
-            <label>Max Session Duration (minutes)</label>
-            <input type="number" id="set-MAX_SESSION_MINUTES" placeholder="25">
-          </div>
-          <div class="form-group">
-            <label>Timezone</label>
-            <input type="text" id="set-TIMEZONE" placeholder="Asia/Kolkata">
-          </div>
-        </div>
-      </div>
-      <div style="margin-top: 16px;">
-        <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
-      </div>
-    </div>
+        <div class="page-body">
 
-    <!-- ═══ Sessions Page ═══ -->
-    <div id="page-sessions" class="page">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Session History</div>
-          <button class="btn btn-ghost" onclick="loadSessions()">Refresh</button>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Window</th>
-                <th>Started</th>
-                <th>Ended</th>
-                <th>Scrolled</th>
-                <th>Matched</th>
-                <th>Reacted</th>
-                <th>Skipped</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="sessionHistory"></tbody>
-          </table>
+          <!-- React to All -->
+          <div class="card" style="margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; padding: 14px 20px; gap: 16px;">
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">React to All Posts</div>
+                <div style="font-size: 12px; color: var(--text-muted);">Reacts to every post in your feed, no keyword filtering.</div>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="reactToAllToggle" onchange="toggleReactToAll()">
+                <span class="toggle-track"></span>
+                <span class="toggle-thumb"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Keyword Lists -->
+          <div id="keywordSection" class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Primary Keywords</div>
+              <div id="primaryTags" class="tags-container">
+                <input type="text" class="tags-input" placeholder="Type and press Enter..." onkeydown="handleTagInput(event, 'primary')">
+              </div>
+              <div class="section-footer">Posts matching these get reactions. Strict match first, then fuzzy.</div>
+            </div>
+            <div>
+              <div class="section-header">Secondary Keywords</div>
+              <div id="secondaryTags" class="tags-container">
+                <input type="text" class="tags-input" placeholder="Type and press Enter..." onkeydown="handleTagInput(event, 'secondary')">
+              </div>
+              <div class="section-footer">Fallback keywords when primary doesn't find enough.</div>
+            </div>
+          </div>
+
+          <!-- Reaction Map -->
+          <div id="reactionMapSection">
+            <div class="section-header">Reaction Keyword Map</div>
+            <div class="card" style="margin-bottom: 20px;">
+              <div style="padding: 16px 20px;">
+                <div class="grid-2" style="gap: 16px; margin-bottom: 16px;">
+                  <div class="form-group">
+                    <div class="form-label" style="color: var(--amber-400);">Celebrate</div>
+                    <textarea id="map-celebrate" class="form-textarea" rows="2" placeholder="new role, promotion, excited to announce..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <div class="form-label" style="color: var(--violet-400);">Insightful</div>
+                    <textarea id="map-insightful" class="form-textarea" rows="2" placeholder="trend, industry, research, data shows..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <div class="form-label" style="color: var(--rose-500);">Love</div>
+                    <textarea id="map-love" class="form-textarea" rows="2" placeholder="grateful, thankful, journey..."></textarea>
+                  </div>
+                  <div class="form-group">
+                    <div class="form-label" style="color: var(--green-400);">Support</div>
+                    <textarea id="map-support" class="form-textarea" rows="2" placeholder="tough, challenge, struggle..."></textarea>
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div class="form-label" style="margin: 0; white-space: nowrap;">Fuzzy Threshold</div>
+                  <input type="number" id="fuzzyThreshold" class="form-input" min="0" max="1" step="0.05" value="0.3" style="width: 100px;">
+                  <span style="font-size: 12px; color: var(--text-muted);">0 = exact, 1 = loose</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="saveKeywords()">Save Keywords</button>
         </div>
       </div>
-    </div>
+
+      <!-- ═══ Settings Page ═══ -->
+      <div id="page-settings" class="page">
+        <div class="page-header">
+          <div class="page-title">Settings</div>
+          <div class="page-subtitle">Session windows, targets, and timing configuration</div>
+        </div>
+        <div class="page-body">
+          <div class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Session Windows</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Morning</label>
+                  <input type="text" class="form-input" id="set-MORNING_WINDOW" placeholder="08:00-10:00">
+                </div>
+                <div class="form-row">
+                  <label>Afternoon</label>
+                  <input type="text" class="form-input" id="set-AFTERNOON_WINDOW" placeholder="12:00-14:00">
+                </div>
+                <div class="form-row">
+                  <label>Evening</label>
+                  <input type="text" class="form-input" id="set-EVENING_WINDOW" placeholder="17:00-19:00">
+                </div>
+              </div>
+              <div class="section-footer">24h format. Sessions auto-trigger during these windows.</div>
+            </div>
+
+            <div>
+              <div class="section-header">Targets & Timing</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Min Daily Reactions</label>
+                  <input type="number" class="form-input" id="set-DAILY_TARGET_MIN" placeholder="45">
+                </div>
+                <div class="form-row">
+                  <label>Max Daily Reactions</label>
+                  <input type="number" class="form-input" id="set-DAILY_TARGET_MAX" placeholder="55">
+                </div>
+                <div class="form-row">
+                  <label>Max Jitter (min)</label>
+                  <input type="number" class="form-input" id="set-MAX_JITTER_MINUTES" placeholder="30">
+                </div>
+                <div class="form-row">
+                  <label>Session Duration (min)</label>
+                  <input type="number" class="form-input" id="set-MAX_SESSION_MINUTES" placeholder="25">
+                </div>
+                <div class="form-row">
+                  <label>Timezone</label>
+                  <input type="text" class="form-input" id="set-TIMEZONE" placeholder="Asia/Kolkata">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+      </div>
+
+      <!-- ═══ Sessions Page ═══ -->
+      <div id="page-sessions" class="page">
+        <div class="page-header">
+          <div class="page-title">Sessions</div>
+          <div class="page-subtitle">Session history and performance</div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Session History</div>
+              <button class="btn btn-secondary" onclick="loadSessions()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Window</th>
+                    <th>Started</th>
+                    <th>Ended</th>
+                    <th>Scrolled</th>
+                    <th>Matched</th>
+                    <th>Reacted</th>
+                    <th>Skipped</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="sessionHistory"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
   </div>
 
   <script src="/js/app.js"></script>

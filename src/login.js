@@ -19,7 +19,8 @@ async function manualLogin() {
     log.info('Waiting for you to complete login...');
     log.info('(The browser will close automatically once login is detected)\n');
 
-    // Poll for successful login by checking URL (10-minute timeout)
+    // Poll for successful login (10-minute timeout)
+    // Detect login by checking we're no longer on a login/auth page
     const LOGIN_TIMEOUT = 10 * 60 * 1000;
     const startTime = Date.now();
     let loggedIn = false;
@@ -30,7 +31,15 @@ async function manualLogin() {
       }
       await page.waitForTimeout(3000);
       const url = page.url();
-      if (url.includes('/feed') || url.includes('/mynetwork') || url.includes('/messaging')) {
+      log.info(`Current URL: ${url}`);
+
+      // Still on login/auth pages — keep waiting
+      if (url.includes('/login') || url.includes('/authwall') || url.includes('/checkpoint') || url.includes('/uas/')) {
+        continue;
+      }
+
+      // If we're on any LinkedIn page that's NOT a login page, we're in
+      if (url.includes('linkedin.com/')) {
         loggedIn = true;
       }
     }

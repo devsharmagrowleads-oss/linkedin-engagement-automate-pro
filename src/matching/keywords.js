@@ -14,6 +14,10 @@ class KeywordMatcher {
     this.secondary = keywordsConfig.secondary || [];
     this.threshold = keywordsConfig.fuzzyThreshold || 0.3;
 
+    // React to all posts when flag is set or when no keywords are configured
+    this.reactToAll = keywordsConfig.reactToAll === true
+      || (this.primary.length === 0 && this.secondary.length === 0);
+
     // Pre-lowercase keywords once at construction (avoids repeated toLowerCase per post)
     this.primaryLower = this.primary.map(k => k.toLowerCase());
     this.secondaryLower = this.secondary.map(k => k.toLowerCase());
@@ -42,6 +46,11 @@ class KeywordMatcher {
   matchAllTiers(postText) {
     const text = (postText || '').toLowerCase();
     if (text.length < 20) return null;
+
+    // If reactToAll is enabled, match everything
+    if (this.reactToAll) {
+      return { matched: true, keyword: '*', level: 'all' };
+    }
 
     // Tier 1: Exact case-insensitive substring match against primary keywords
     for (let i = 0; i < this.primaryLower.length; i++) {

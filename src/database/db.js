@@ -12,6 +12,7 @@ if (!fs.existsSync(dataDir)) {
 
 const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL'); // Safe with WAL, reduces fsync overhead
 db.pragma('foreign_keys = ON');
 
 // Create tables
@@ -188,8 +189,18 @@ function endSession(sessionId, stats) {
   );
 }
 
+// Wrap insert + increment in a transaction (single disk write, atomic)
+const _logReactionTx = db.transaction((sessionId, urn, author, snippet, reactionType, matchLevel, matchedKeyword) => {
+  const result = stmts.insertReaction.run(sessionId, urn, author, snippet, reactionType, matchLevel, matchedKeyword);
+  if (result.changes > 0) {
+    stmts.incrementAchieved.run(getTodayStr());
+    return true;
+  }
+  return false;
+});
+
 function logReaction(sessionId, post, reactionType, matchLevel, matchedKeyword) {
-  const result = stmts.insertReaction.run(
+  return _logReactionTx(
     sessionId,
     post.urn,
     post.author || 'Unknown',
@@ -198,13 +209,6 @@ function logReaction(sessionId, post, reactionType, matchLevel, matchedKeyword) 
     matchLevel,
     matchedKeyword
   );
-
-  if (result.changes > 0) {
-    const today = getTodayStr();
-    stmts.incrementAchieved.run(today);
-    return true;
-  }
-  return false;
 }
 
 function isAlreadyReacted(urn) {

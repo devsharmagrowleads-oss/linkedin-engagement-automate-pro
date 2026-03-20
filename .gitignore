@@ -1,4 +1,15 @@
 node_modules/
+
+# Browser profile contains LinkedIn session cookies — sensitive, never commit
 browser-profile/
+
+# SQLite database, error screenshots, lockfiles
 data/
+
+# Environment config (contains no secrets currently, but may in future)
 .env
+
+# Debug/diagnostic scratch files
+src/debug*.js
+src/diagnose*.js
+src/verify*.js

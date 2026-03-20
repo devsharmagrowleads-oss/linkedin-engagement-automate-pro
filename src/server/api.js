@@ -8,6 +8,28 @@ const log = require('../utils/logger');
 
 const router = express.Router();
 
+// ── SSE (Server-Sent Events) for live session progress ──────────────
+
+const sseClients = new Set();
+
+router.get('/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write('data: {"type":"connected"}\n\n');
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+function broadcast(event) {
+  const data = `data: ${JSON.stringify(event)}\n\n`;
+  for (const client of sseClients) {
+    client.write(data);
+  }
+}
+
 // ── Validation helpers ──────────────────────────────────────────────
 
 const TIME_WINDOW_RE = /^\d{2}:\d{2}-\d{2}:\d{2}$/;
@@ -57,13 +79,17 @@ router.get('/status', (req, res) => {
     const lockExists = fs.existsSync(config.lockfilePath);
 
     const profileExists = checkProfileExists();
+    // Only need re-login if profile doesn't exist OR the most recent session was an expiry error
+    // (a successful session after login clears this condition)
     const lastError = db.getLastError();
-    const needsRelogin = (lastError && lastError.error_message === 'Session expired') || !profileExists;
+    const lastSessionExpired = lastError && lastError.error_message === 'Session expired';
+    const needsRelogin = !profileExists || (lastSessionExpired && !profileExists);
 
     res.json({
       status: running ? 'running' : 'idle',
       lockActive: lockExists,
       loggedIn: profileExists,
+      loginInProgress: !!loginProcess,
       needsRelogin,
       daily: {
         target: progress.target || 0,
@@ -148,6 +174,7 @@ router.post('/keywords', (req, res) => {
 
     // Only write validated fields (prevent arbitrary key injection)
     const clean = {
+      reactToAll: data.reactToAll === true,
       primary: data.primary.filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()),
       secondary: data.secondary.filter(k => typeof k === 'string' && k.trim()).map(k => k.trim()),
       reactionMap: {},
@@ -262,14 +289,33 @@ router.post('/session/start', (req, res) => {
   activeSessionProcess = spawn('node', [indexPath], {
     cwd: path.join(__dirname, '..', '..'),
     env: { ...process.env, FORCE_NO_JITTER: '1' },
-    stdio: 'ignore', // Don't accumulate unbounded output
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+
+  // Stream stdout/stderr to SSE clients for live progress
+  const forwardOutput = (stream) => {
+    let buffer = '';
+    stream.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete line in buffer
+      for (const line of lines) {
+        if (line.trim()) {
+          broadcast({ type: 'session_log', message: line.trim() });
+        }
+      }
+    });
+  };
+  forwardOutput(activeSessionProcess.stdout);
+  forwardOutput(activeSessionProcess.stderr);
 
   activeSessionProcess.on('close', (code) => {
     log.info(`Session process exited with code ${code}`);
+    broadcast({ type: 'session_ended', code });
     activeSessionProcess = null;
   });
 
+  broadcast({ type: 'session_started' });
   res.json({ success: true, message: 'Session started' });
 });
 
@@ -314,6 +360,13 @@ router.post('/login/start', (req, res) => {
   });
 
   res.json({ success: true, message: 'Login browser opened. Complete login in the browser window.' });
+});
+
+router.get('/login/status', (req, res) => {
+  res.json({
+    inProgress: !!loginProcess,
+    loggedIn: checkProfileExists(),
+  });
 });
 
 // ── Error Logs ──────────────────────────────────────────────────────

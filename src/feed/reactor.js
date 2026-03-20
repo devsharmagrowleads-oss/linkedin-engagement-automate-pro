@@ -11,24 +11,25 @@ const log = require('../utils/logger');
  * 3. Hover over reaction button to open picker
  * 4. Select target reaction
  * 5. Click with human-like mouse movement
- *
- * @param {Object} page - Playwright page
- * @param {Object} post - Post object with urn, text, author
- * @param {string} reactionType - 'like', 'celebrate', 'insightful', 'love', 'support', 'funny'
- * @returns {boolean} - Whether reaction was successful
  */
 async function reactToPost(page, post, reactionType) {
   try {
-    // Find the post element by URN
-    const postEl = page.locator(`div[data-urn="${post.urn}"]`);
-    const isVisible = await postEl.isVisible().catch(() => false);
-    if (!isVisible) {
-      log.warn(`Post not visible: ${post.urn}`);
+    // Find the post — try componentkey on element itself, then as parent of a child with it
+    const directEl = page.locator(`div[componentkey="${post.urn}"]`).first();
+    const parentEl = page.locator(`div[role="listitem"]:has(div[componentkey="${post.urn}"])`).first();
+
+    const directVisible = await directEl.isVisible().catch(() => false);
+    const parentVisible = !directVisible && await parentEl.isVisible().catch(() => false);
+
+    if (!directVisible && !parentVisible) {
+      log.warn(`Post not visible: ${post.urn.substring(0, 30)}...`);
       return false;
     }
 
+    const activePostEl = directVisible ? directEl : parentEl;
+
     // Scroll post into view
-    await postEl.scrollIntoViewIfNeeded();
+    await activePostEl.scrollIntoViewIfNeeded();
     await sleep(humanDelay(500, 1000));
 
     // Simulate reading the post
@@ -36,22 +37,13 @@ async function reactToPost(page, post, reactionType) {
     await sleep(readMs);
 
     // Find the reaction button within this post
-    const likeBtn = postEl.locator(SELECTORS.likeButton).first();
-    const likeBtnExists = await likeBtn.isVisible().catch(() => false);
+    const reactionBtn = activePostEl.locator(SELECTORS.likeButton + ', ' + SELECTORS.likeButtonAria).first();
+    const btnExists = await reactionBtn.isVisible().catch(() => false);
 
-    if (!likeBtnExists) {
-      // Try aria-label fallback
-      const ariaBtn = postEl.locator(SELECTORS.likeButtonAria).first();
-      const ariaBtnExists = await ariaBtn.isVisible().catch(() => false);
-      if (!ariaBtnExists) {
-        log.warn(`No reaction button found for post: ${post.urn}`);
-        return false;
-      }
+    if (!btnExists) {
+      log.warn(`No reaction button found for post by ${post.author}`);
+      return false;
     }
-
-    const reactionBtn = likeBtnExists
-      ? likeBtn
-      : postEl.locator(SELECTORS.likeButtonAria).first();
 
     if (reactionType === 'like') {
       // Simple like - just click the button
@@ -61,35 +53,45 @@ async function reactToPost(page, post, reactionType) {
       return true;
     }
 
-    // For other reactions, we need to hover to open the reaction picker
-    const box = await reactionBtn.boundingBox();
-    if (!box) return false;
-
-    // Hover over the like button to trigger the reaction picker
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await sleep(humanDelay(800, 1500)); // Wait for picker to appear
-
-    // Find the specific reaction in the picker
+    // For other reactions, hover to open the reaction picker (with 1 retry)
     const ariaLabel = SELECTORS.reactions[reactionType] || SELECTORS.reactions.like;
-    const targetReaction = page.locator(`button[aria-label="${ariaLabel}"]`).first();
+    let pickerOpened = false;
 
-    const pickerVisible = await targetReaction.isVisible({ timeout: 3000 }).catch(() => false);
-    if (!pickerVisible) {
-      // Fallback: just click like if picker doesn't appear
-      log.warn(`Reaction picker didn't appear, falling back to Like for ${post.author}`);
-      await humanClick(page, reactionBtn);
-      await sleep(humanDelay(300, 800));
-      return true;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const box = await reactionBtn.boundingBox();
+      if (!box) return false;
+
+      // Hover with slight offset on retry to avoid cached hover state
+      const offsetX = attempt === 0 ? 0 : (Math.random() - 0.5) * 6;
+      const offsetY = attempt === 0 ? 0 : (Math.random() - 0.5) * 4;
+      await page.mouse.move(box.x + box.width / 2 + offsetX, box.y + box.height / 2 + offsetY);
+      await sleep(humanDelay(1200, 2000));
+
+      const targetReaction = page.locator(`button[aria-label="${ariaLabel}"]`).first();
+      pickerOpened = await targetReaction.isVisible({ timeout: 4000 }).catch(() => false);
+
+      if (pickerOpened) {
+        await humanClick(page, targetReaction);
+        await sleep(humanDelay(500, 1200));
+        log.success(`Reacted "${reactionType}" to post by ${post.author}`);
+        return true;
+      }
+
+      if (attempt === 0) {
+        log.warn(`Reaction picker didn't appear for ${post.author}, retrying...`);
+        // Move mouse away then back to reset hover state
+        await page.mouse.move(box.x - 50, box.y - 50);
+        await sleep(humanDelay(300, 600));
+      }
     }
 
-    // Click the target reaction
-    await humanClick(page, targetReaction);
-    await sleep(humanDelay(500, 1200));
-
-    log.success(`Reacted "${reactionType}" to post by ${post.author}`);
+    // Fallback: just click like if picker doesn't appear after retries
+    log.warn(`Reaction picker failed after retry, falling back to Like for ${post.author}`);
+    await humanClick(page, reactionBtn);
+    await sleep(humanDelay(300, 800));
     return true;
   } catch (err) {
-    log.error(`Failed to react to post ${post.urn}: ${err.message}`);
+    log.error(`Failed to react to post by ${post.author}: ${err.message}`);
     return false;
   }
 }
