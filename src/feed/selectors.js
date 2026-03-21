@@ -75,5 +75,4 @@ async function validateSelectors(page) {
   return { valid: !allZero, details: results };
 }
 
-module.exports = SELECTORS;
-module.exports.validateSelectors = validateSelectors;
+module.exports = { ...SELECTORS, validateSelectors };

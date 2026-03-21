@@ -15,6 +15,17 @@ function loadKeywords() {
   return config;
 }
 
+// Validate IANA timezone identifier
+function validateTimezone(tz) {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return tz;
+  } catch {
+    console.warn(`Invalid TIMEZONE "${tz}" — falling back to Asia/Kolkata`);
+    return 'Asia/Kolkata';
+  }
+}
+
 const config = {
   // Session windows
   morningWindow: process.env.MORNING_WINDOW || '08:00-10:00',
@@ -22,17 +33,29 @@ const config = {
   eveningWindow: process.env.EVENING_WINDOW || '17:00-19:00',
 
   // Daily targets
-  dailyTargetMin: parseInt(process.env.DAILY_TARGET_MIN, 10) || 45,
-  dailyTargetMax: parseInt(process.env.DAILY_TARGET_MAX, 10) || 55,
+  dailyTargetMin: parseInt(process.env.DAILY_TARGET_MIN, 10) || 15,
+  dailyTargetMax: parseInt(process.env.DAILY_TARGET_MAX, 10) || 25,
 
   // Timing
   maxJitterMinutes: parseInt(process.env.MAX_JITTER_MINUTES, 10) || 30,
   maxSessionMinutes: parseInt(process.env.MAX_SESSION_MINUTES, 10) || 25,
 
   // Browser
-  timezone: process.env.TIMEZONE || 'Asia/Kolkata',
+  timezone: validateTimezone(process.env.TIMEZONE || 'Asia/Kolkata'),
+  locale: process.env.LOCALE || 'en-IN',
   viewportWidth: parseInt(process.env.VIEWPORT_WIDTH, 10) || 1366,
   viewportHeight: parseInt(process.env.VIEWPORT_HEIGHT, 10) || 768,
+
+  // Anti-detection behavior
+  skipDayPercent: parseInt(process.env.SKIP_DAY_PERCENT, 10) || 20,
+  browseOnlyPercent: parseInt(process.env.BROWSE_ONLY_PERCENT, 10) || 20,
+  windowVarianceMinutes: parseInt(process.env.WINDOW_VARIANCE_MINUTES, 10) || 45,
+
+  // User identity (for admin tracking)
+  userName: process.env.USER_NAME || 'unknown',
+  team: process.env.TEAM || 'default',
+  adminApiUrl: (process.env.ADMIN_API_URL || '').replace(/\/+$/, ''),
+  adminApiKey: process.env.ADMIN_API_KEY || '',
 
   // Paths
   browserProfileDir: path.join(__dirname, '..', 'browser-profile'),

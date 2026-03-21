@@ -54,6 +54,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_reactions_urn ON reactions(post_urn);
   CREATE INDEX IF NOT EXISTS idx_reactions_date ON reactions(reacted_at);
   CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
+
+  CREATE TABLE IF NOT EXISTS cooldowns (
+    key TEXT PRIMARY KEY,
+    until TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS skip_days (
+    date TEXT PRIMARY KEY
+  );
 `);
 
 // Migration: add post_url column if it doesn't exist (for existing databases)
@@ -166,6 +175,25 @@ const stmts = {
 
   getErrorSessions: db.prepare(`
     SELECT * FROM sessions WHERE status = 'error' ORDER BY started_at DESC LIMIT 20
+  `),
+
+  // Cooldown management
+  setCooldown: db.prepare(`
+    INSERT OR REPLACE INTO cooldowns (key, until) VALUES (?, ?)
+  `),
+  getCooldown: db.prepare(`
+    SELECT until FROM cooldowns WHERE key = ?
+  `),
+  clearCooldown: db.prepare(`
+    DELETE FROM cooldowns WHERE key = ?
+  `),
+
+  // Skip day management
+  markSkipDay: db.prepare(`
+    INSERT OR IGNORE INTO skip_days (date) VALUES (?)
+  `),
+  isSkipDay: db.prepare(`
+    SELECT 1 FROM skip_days WHERE date = ?
   `),
 };
 
@@ -288,6 +316,31 @@ function getErrorSessions() {
   return stmts.getErrorSessions.all();
 }
 
+// Cooldown: set a cooldown that expires at a given ISO timestamp
+function setCooldown(key, hoursFromNow) {
+  const until = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
+  stmts.setCooldown.run(key, until);
+  log.info(`Cooldown set: ${key} until ${until}`);
+}
+
+function isCooldownActive(key) {
+  const row = stmts.getCooldown.get(key);
+  if (!row) return false;
+  if (new Date(row.until) > new Date()) return true;
+  // Expired — clean up
+  stmts.clearCooldown.run(key);
+  return false;
+}
+
+// Skip days: mark today as a skip day
+function markSkipDay(date) {
+  stmts.markSkipDay.run(date);
+}
+
+function isSkipDay(date) {
+  return !!stmts.isSkipDay.get(date);
+}
+
 module.exports = {
   startSession,
   endSession,
@@ -307,4 +360,9 @@ module.exports = {
   getReactionsCount,
   getRecentSessions,
   getErrorSessions,
+  // Cooldown & skip days
+  setCooldown,
+  isCooldownActive,
+  markSkipDay,
+  isSkipDay,
 };

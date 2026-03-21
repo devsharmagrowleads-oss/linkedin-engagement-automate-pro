@@ -14,10 +14,23 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:");
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// CSRF protection: block cross-origin mutating requests
+app.use('/api', (req, res, next) => {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+    const origin = req.headers.origin || req.headers.referer || '';
+    if (origin && !origin.includes('localhost:') && !origin.includes('127.0.0.1:')) {
+      return res.status(403).json({ error: 'Forbidden: cross-origin request' });
+    }
+  }
+  next();
+});
+
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
 
 // Error screenshots served as static files
 app.use('/screenshots', express.static(path.join(__dirname, '..', '..', 'data', 'errors')));

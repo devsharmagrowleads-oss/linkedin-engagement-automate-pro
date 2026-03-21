@@ -8,6 +8,10 @@ chromium.use(stealth);
 async function launchBrowser() {
   log.info('Launching browser with stealth mode...');
 
+  // Add minor viewport variance between sessions (±0-20px) to avoid static fingerprint
+  const widthVariance = Math.floor(Math.random() * 21) - 10;
+  const heightVariance = Math.floor(Math.random() * 21) - 10;
+
   const context = await chromium.launchPersistentContext(config.browserProfileDir, {
     headless: false,
     args: [
@@ -19,10 +23,10 @@ async function launchBrowser() {
       '--no-first-run',
     ],
     viewport: {
-      width: config.viewportWidth,
-      height: config.viewportHeight,
+      width: config.viewportWidth + widthVariance,
+      height: config.viewportHeight + heightVariance,
     },
-    locale: 'en-US',
+    locale: config.locale,
     timezoneId: config.timezone,
     ignoreDefaultArgs: ['--enable-automation'],
   });

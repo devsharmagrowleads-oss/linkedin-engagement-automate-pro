@@ -112,7 +112,7 @@ async function extractPost(postLocator) {
       postUrl: (postData.postUrl || '').trim(),
     };
   } catch (err) {
-    // Silently skip posts that can't be extracted
+    log.warn(`Post extraction failed: ${err.message}`);
     return null;
   }
 }

@@ -18,6 +18,9 @@ class KeywordMatcher {
     this.reactToAll = keywordsConfig.reactToAll === true
       || (this.primary.length === 0 && this.secondary.length === 0);
 
+    // Cap for reactToAll mode: only react to ~30% of posts max (prevents ban)
+    this._reactToAllCounter = 0;
+
     // Pre-lowercase keywords once at construction (avoids repeated toLowerCase per post)
     this.primaryLower = this.primary.map(k => k.toLowerCase());
     this.secondaryLower = this.secondary.map(k => k.toLowerCase());
@@ -47,8 +50,13 @@ class KeywordMatcher {
     const text = (postText || '').toLowerCase();
     if (text.length < 20) return null;
 
-    // If reactToAll is enabled, match everything
+    // If reactToAll is enabled, match ~30% of posts (cap to avoid detection)
     if (this.reactToAll) {
+      this._reactToAllCounter++;
+      // Only match roughly 30% of posts — skip the rest to look human
+      if (this._reactToAllCounter % 3 !== 0 && Math.random() > 0.35) {
+        return null;
+      }
       return { matched: true, keyword: '*', level: 'all' };
     }
 

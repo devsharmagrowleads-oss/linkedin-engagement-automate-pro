@@ -27,6 +27,12 @@ async function scrollFeed(page, maxMinutes, onPostsFound, shouldStop) {
       break;
     }
 
+    // Mid-session auth check — detect if LinkedIn redirected to login
+    const currentUrl = page.url();
+    if (currentUrl.includes('/login') || currentUrl.includes('/authwall') || currentUrl.includes('/checkpoint')) {
+      throw new Error('Session expired: redirected to login page mid-session');
+    }
+
     // Extract currently visible posts
     const posts = await extractVisiblePosts(page);
     if (totalScrolled === 0 && posts.length === 0) {

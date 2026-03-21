@@ -13,6 +13,9 @@ const router = express.Router();
 const sseClients = new Set();
 
 router.get('/events', (req, res) => {
+  if (sseClients.size >= 10) {
+    return res.status(503).end();
+  }
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -45,7 +48,9 @@ const ALLOWED_SETTINGS = [
   'MORNING_WINDOW', 'AFTERNOON_WINDOW', 'EVENING_WINDOW',
   'DAILY_TARGET_MIN', 'DAILY_TARGET_MAX',
   'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES',
-  'TIMEZONE', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
+  'TIMEZONE', 'LOCALE', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
+  'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES',
+  'USER_NAME', 'TEAM', 'ADMIN_API_URL', 'ADMIN_API_KEY',
 ];
 
 // ── Cached checks for /status hot path ──────────────────────────────
@@ -79,11 +84,7 @@ router.get('/status', (req, res) => {
     const lockExists = fs.existsSync(config.lockfilePath);
 
     const profileExists = checkProfileExists();
-    // Only need re-login if profile doesn't exist OR the most recent session was an expiry error
-    // (a successful session after login clears this condition)
-    const lastError = db.getLastError();
-    const lastSessionExpired = lastError && lastError.error_message === 'Session expired';
-    const needsRelogin = !profileExists || (lastSessionExpired && !profileExists);
+    const needsRelogin = !profileExists;
 
     res.json({
       status: running ? 'running' : 'idle',
@@ -233,8 +234,18 @@ router.post('/settings', (req, res) => {
       }
     }
 
+    // Validate timezone — check against Intl API
+    if (settings.TIMEZONE) {
+      const tz = sanitizeValue(settings.TIMEZONE);
+      try {
+        Intl.DateTimeFormat(undefined, { timeZone: tz });
+      } catch {
+        return res.status(400).json({ error: `TIMEZONE "${tz}" is not a valid IANA timezone identifier` });
+      }
+    }
+
     // Validate numeric fields
-    for (const key of ['DAILY_TARGET_MIN', 'DAILY_TARGET_MAX', 'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT']) {
+    for (const key of ['DAILY_TARGET_MIN', 'DAILY_TARGET_MAX', 'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT', 'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES']) {
       if (settings[key] && !NUMERIC_RE.test(sanitizeValue(settings[key]))) {
         return res.status(400).json({ error: `${key} must be a number` });
       }
@@ -248,9 +259,9 @@ router.post('/settings', (req, res) => {
       `AFTERNOON_WINDOW=${s('AFTERNOON_WINDOW', '12:00-14:00')}`,
       `EVENING_WINDOW=${s('EVENING_WINDOW', '17:00-19:00')}`,
       '',
-      '# Daily reaction target range',
-      `DAILY_TARGET_MIN=${s('DAILY_TARGET_MIN', '45')}`,
-      `DAILY_TARGET_MAX=${s('DAILY_TARGET_MAX', '55')}`,
+      '# Daily reaction target range (keep low to avoid detection)',
+      `DAILY_TARGET_MIN=${s('DAILY_TARGET_MIN', '15')}`,
+      `DAILY_TARGET_MAX=${s('DAILY_TARGET_MAX', '25')}`,
       '',
       '# Max jitter delay in minutes before starting a session',
       `MAX_JITTER_MINUTES=${s('MAX_JITTER_MINUTES', '30')}`,
@@ -261,9 +272,27 @@ router.post('/settings', (req, res) => {
       '# Timezone',
       `TIMEZONE=${s('TIMEZONE', 'Asia/Kolkata')}`,
       '',
+      '# Browser locale (should match timezone region)',
+      `LOCALE=${s('LOCALE', 'en-IN')}`,
+      '',
       '# Browser viewport',
       `VIEWPORT_WIDTH=${s('VIEWPORT_WIDTH', '1366')}`,
       `VIEWPORT_HEIGHT=${s('VIEWPORT_HEIGHT', '768')}`,
+      '',
+      '# Anti-detection: skip day probability (0-100)',
+      `SKIP_DAY_PERCENT=${s('SKIP_DAY_PERCENT', '20')}`,
+      '',
+      '# Anti-detection: browse-only session probability (0-100)',
+      `BROWSE_ONLY_PERCENT=${s('BROWSE_ONLY_PERCENT', '20')}`,
+      '',
+      '# Anti-detection: window time variance in minutes',
+      `WINDOW_VARIANCE_MINUTES=${s('WINDOW_VARIANCE_MINUTES', '45')}`,
+      '',
+      '# User identity (for admin tracking)',
+      `USER_NAME=${s('USER_NAME', 'YourName')}`,
+      `TEAM=${s('TEAM', 'default')}`,
+      `ADMIN_API_URL=${s('ADMIN_API_URL', '')}`,
+      `ADMIN_API_KEY=${s('ADMIN_API_KEY', '')}`,
       '',
     ];
 

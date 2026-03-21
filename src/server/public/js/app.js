@@ -4,6 +4,10 @@ async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`/api${path}`, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `API ${res.status}`);
+  }
   return res.json();
 }
 
@@ -49,6 +53,9 @@ document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
 // ── Dashboard ───────────────────────────────────────────────────────
 
 let pollInterval;
+let lastSessionStatus = 'idle'; // track for adaptive polling
+const POLL_ACTIVE = 5000;   // 5s when session is running
+const POLL_IDLE = 30000;    // 30s when idle
 
 async function refreshDashboard() {
   try {
@@ -115,6 +122,14 @@ async function refreshDashboard() {
     renderWeekChart(stats.stats || []);
     renderReactionTypes(stats.stats || []);
     renderRecentActivity(recent.reactions || []);
+
+    // Adaptive polling: speed up when active, slow down when idle
+    const currentStatus = status.status === 'running' || status.loginInProgress ? 'active' : 'idle';
+    if (currentStatus !== lastSessionStatus) {
+      lastSessionStatus = currentStatus;
+      clearInterval(pollInterval);
+      pollInterval = setInterval(refreshDashboard, currentStatus === 'active' ? POLL_ACTIVE : POLL_IDLE);
+    }
   } catch (err) {
     console.error('Dashboard refresh error:', err);
   }
@@ -180,11 +195,11 @@ function renderRecentActivity(reactions) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No reactions yet</td></tr>';
     return;
   }
-  tbody.innerHTML = reactions.map(r => `<tr class="clickable-row" onclick="openLinkedInPost('${escapeAttr(r.post_url || r.post_urn)}')" title="Click to view post on LinkedIn">
+  tbody.innerHTML = reactions.map(r => `<tr class="clickable-row" data-url="${escapeHtml(r.post_url || r.post_urn)}" title="Click to view post on LinkedIn">
     <td>${formatTime(r.reacted_at)}</td>
     <td>${escapeHtml(r.author)}</td>
-    <td><span class="reaction-badge reaction-${r.reaction_type}">${r.reaction_type}</span></td>
-    <td><span class="match-badge match-${r.match_level}">${r.match_level}</span></td>
+    <td><span class="reaction-badge reaction-${escapeHtml(r.reaction_type)}">${escapeHtml(r.reaction_type)}</span></td>
+    <td><span class="match-badge match-${escapeHtml(r.match_level)}">${escapeHtml(r.match_level)}</span></td>
     <td style="color:var(--text-muted);">${escapeHtml(r.matched_keyword || '')}</td>
   </tr>`).join('');
 }
@@ -244,16 +259,16 @@ async function loadMoreReactions() {
 
 function renderAllReactions(reactions, append) {
   const tbody = document.getElementById('allReactions');
-  const html = reactions.map(r => `<tr class="clickable-row" onclick="openLinkedInPost('${escapeAttr(r.post_url || r.post_urn)}')" title="Click to view post on LinkedIn">
+  const html = reactions.map(r => `<tr class="clickable-row" data-url="${escapeHtml(r.post_url || r.post_urn)}" title="Click to view post on LinkedIn">
     <td>${formatTime(r.reacted_at)}</td>
     <td>${escapeHtml(r.author)}</td>
     <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);">${escapeHtml(r.content_snippet || '')}</td>
-    <td><span class="reaction-badge reaction-${r.reaction_type}">${r.reaction_type}</span></td>
-    <td><span class="match-badge match-${r.match_level}">${r.match_level}</span></td>
+    <td><span class="reaction-badge reaction-${escapeHtml(r.reaction_type)}">${escapeHtml(r.reaction_type)}</span></td>
+    <td><span class="match-badge match-${escapeHtml(r.match_level)}">${escapeHtml(r.match_level)}</span></td>
     <td style="color:var(--text-muted);">${escapeHtml(r.matched_keyword || '')}</td>
   </tr>`).join('');
   if (append) {
-    tbody.innerHTML += html;
+    tbody.insertAdjacentHTML('beforeend', html);
   } else {
     tbody.innerHTML = html || '<tr><td colspan="6" class="empty-state">No reactions yet</td></tr>';
   }
@@ -287,7 +302,7 @@ function renderTags(type, keywords) {
   for (const kw of keywords) {
     const tag = document.createElement('span');
     tag.className = 'tag';
-    tag.innerHTML = `${escapeHtml(kw)} <span class="remove" onclick="removeTag(this, '${type}')">&times;</span>`;
+    tag.innerHTML = `${escapeHtml(kw)} <span class="remove" data-tag-type="${escapeHtml(type)}">&times;</span>`;
     container.insertBefore(tag, input);
   }
 }
@@ -308,6 +323,12 @@ function removeTag(el, type) {
   keywordsData[type] = keywordsData[type].filter(k => k !== text);
   tag.remove();
 }
+
+// Delegated handler for tag remove buttons (no inline onclick)
+document.addEventListener('click', (e) => {
+  const removeBtn = e.target.closest('.remove[data-tag-type]');
+  if (removeBtn) removeTag(removeBtn, removeBtn.dataset.tagType);
+});
 
 function toggleReactToAll() {
   const isOn = document.getElementById('reactToAllToggle').checked;
@@ -395,13 +416,8 @@ function formatTime(dateStr) {
 }
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str || '';
-  return div.innerHTML;
-}
-
-function escapeAttr(str) {
-  return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function openLinkedInPost(url) {
@@ -415,7 +431,12 @@ function openLinkedInPost(url) {
   } else if (!url.startsWith('http')) {
     url = 'https://www.linkedin.com/feed/update/' + encodeURIComponent(url);
   }
-  window.open(url, '_blank');
+  // Block non-http protocols (XSS prevention)
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return;
+  } catch { return; }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 // ── SSE Live Log ────────────────────────────────────────────────────
@@ -446,17 +467,24 @@ function connectSSE() {
   es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
 }
 
+// ── Delegated click handler for clickable rows ──────────────────────
+
+document.addEventListener('click', (e) => {
+  const row = e.target.closest('.clickable-row[data-url]');
+  if (row) openLinkedInPost(row.dataset.url);
+});
+
 // ── Init ────────────────────────────────────────────────────────────
 
 refreshDashboard();
-pollInterval = setInterval(refreshDashboard, 5000);
+pollInterval = setInterval(refreshDashboard, POLL_IDLE); // start slow, speeds up if active
 connectSSE();
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    clearInterval(pollInterval);
-  } else {
+  clearInterval(pollInterval);
+  if (!document.hidden) {
     refreshDashboard();
-    pollInterval = setInterval(refreshDashboard, 5000);
+    const rate = lastSessionStatus === 'active' ? POLL_ACTIVE : POLL_IDLE;
+    pollInterval = setInterval(refreshDashboard, rate);
   }
 });

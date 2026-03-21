@@ -10,14 +10,30 @@ const { validateSelectors } = require('./feed/selectors');
 const { KeywordMatcher } = require('./matching/keywords');
 const { ReactionSelector } = require('./matching/reactions');
 const { humanDelay, sleep, shouldSkip } = require('./behavior/human');
+const { visitProfile, expandPost, randomNavigation, browseOnlySession } = require('./behavior/navigation');
+const { reportSession } = require('./reporting/reporter');
 const db = require('./database/db');
 
-// Determine which session window we're in
+// ── Window variance: randomize session windows daily ────────────────
+
+function getWindowVariance() {
+  // Use date as seed so variance is consistent within a day but changes daily
+  const daySeed = parseInt(db.getTodayStr().replace(/-/g, ''), 10);
+  const pseudoRandom = (seed) => {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  };
+  const varianceRange = config.windowVarianceMinutes;
+  return Math.floor(pseudoRandom(daySeed) * varianceRange * 2) - varianceRange;
+}
+
+// Determine which session window we're in (with daily variance)
 function getCurrentWindow() {
   const now = new Date();
   const hours = now.getHours();
   const minutes = now.getMinutes();
   const time = hours * 60 + minutes;
+  const variance = getWindowVariance(); // ±N minutes, consistent per day
 
   const windows = [
     { name: 'morning', env: config.morningWindow },
@@ -29,8 +45,8 @@ function getCurrentWindow() {
     const [start, end] = w.env.split('-');
     const [sh, sm] = start.split(':').map(Number);
     const [eh, em] = end.split(':').map(Number);
-    const startMin = sh * 60 + sm;
-    const endMin = eh * 60 + em;
+    const startMin = sh * 60 + sm + variance;
+    const endMin = eh * 60 + em + variance;
 
     // Include a generous buffer after window (for jitter)
     if (time >= startMin && time <= endMin + config.maxJitterMinutes) {
@@ -46,6 +62,28 @@ async function runSession() {
   log.info(`\n========================================`);
   log.info(`LinkedIn Auto-React Session (${windowName})`);
   log.info(`========================================\n`);
+
+  // ── Check captcha cooldown (#4) ────────────────────────────────
+  if (db.isCooldownActive('captcha')) {
+    log.warn('Captcha cooldown is active — skipping session to avoid ban escalation.');
+    return 0;
+  }
+
+  // ── Check skip day (#2) ────────────────────────────────────────
+  const today = db.getTodayStr();
+  if (windowName !== 'manual') {
+    if (db.isSkipDay(today)) {
+      log.info('Today is a skip day — no automated sessions. Looks more human.');
+      return 0;
+    }
+    // Decide if today should be a skip day (only on first session check)
+    const sessionsToday = db.getSessionsToday();
+    if (sessionsToday.length === 0 && Math.random() * 100 < config.skipDayPercent) {
+      db.markSkipDay(today);
+      log.info(`Randomly skipping today (${config.skipDayPercent}% chance). More human-like pattern.`);
+      return 0;
+    }
+  }
 
   // Concurrent session guard (atomic lockfile creation with O_EXCL)
   const lockDir = path.dirname(config.lockfilePath);
@@ -82,12 +120,15 @@ async function runSession() {
   // Database maintenance
   db.pruneOldData();
 
+  // ── Check if this should be a browse-only session (#7) ─────────
+  const isBrowseOnly = windowName !== 'manual' && Math.random() * 100 < config.browseOnlyPercent;
+
   // Set up daily target
   const dailyTarget = db.ensureDailyTarget(config.dailyTargetMin, config.dailyTargetMax);
   const progress = db.getDailyProgress();
   const remaining = dailyTarget.target - progress.achieved;
 
-  if (remaining <= 0) {
+  if (!isBrowseOnly && remaining <= 0) {
     log.info(`Daily target already met (${progress.achieved}/${dailyTarget.target}). Skipping session.`);
     cleanup();
     return 0;
@@ -98,11 +139,14 @@ async function runSession() {
   const completedSessions = sessionsToday.filter(s => s.status === 'completed').length;
   const windowCount = [config.morningWindow, config.afternoonWindow, config.eveningWindow].filter(Boolean).length;
   const remainingSessions = Math.max(1, windowCount - completedSessions);
-  // Ensure each session does at least its fair share of the daily target
   const minPerSession = Math.ceil(dailyTarget.target / Math.max(1, windowCount));
-  const sessionTarget = Math.max(minPerSession, Math.ceil(remaining / remainingSessions));
+  const sessionTarget = isBrowseOnly ? 0 : Math.max(minPerSession, Math.ceil(remaining / remainingSessions));
 
-  log.info(`Daily target: ${dailyTarget.target} | Already done: ${progress.achieved} | This session: ~${sessionTarget}`);
+  if (isBrowseOnly) {
+    log.info(`Browse-only session — no reactions this round. Diversifying engagement pattern.`);
+  } else {
+    log.info(`Daily target: ${dailyTarget.target} | Already done: ${progress.achieved} | This session: ~${sessionTarget}`);
+  }
   log.warn('Automated session starting. Avoid LinkedIn in your browser for the next ~15 minutes.\n');
 
   // Load keywords config
@@ -111,7 +155,7 @@ async function runSession() {
   const reactionSelector = new ReactionSelector(keywordsConfig.reactionMap);
 
   // Start session tracking
-  const sessionId = db.startSession(windowName);
+  const sessionId = db.startSession(isBrowseOnly ? `${windowName}-browse` : windowName);
   const stats = {
     postsScrolled: 0,
     postsMatched: 0,
@@ -122,6 +166,8 @@ async function runSession() {
   };
 
   let context;
+  const sessionStartedAt = new Date().toISOString();
+  let linkedinIdentity = { name: 'Unknown', url: '' };
 
   try {
     // Launch browser
@@ -129,13 +175,30 @@ async function runSession() {
     context = browser.context;
     const page = browser.page;
 
-    // Validate session
-    const isValid = await validateSession(page);
-    if (!isValid) {
+    // Validate session and extract LinkedIn identity
+    const sessionCheck = await validateSession(page);
+    if (!sessionCheck.valid) {
       log.error('LinkedIn session is expired. Please click "Login to LinkedIn" in the dashboard.');
       stats.status = 'error';
       stats.errorMessage = 'Session expired';
       return 2;
+    }
+    linkedinIdentity = { name: sessionCheck.linkedinName, url: sessionCheck.linkedinUrl };
+
+    // ── Random initial navigation (#9) — sometimes check other pages first
+    if (Math.random() < 0.35) {
+      await randomNavigation(page);
+    }
+
+    // ── Browse-only session (#7) ─────────────────────────────────
+    if (isBrowseOnly) {
+      const variance = Math.floor(config.maxSessionMinutes * 0.2);
+      const browseMinutes = Math.max(5, config.maxSessionMinutes - variance + Math.floor(Math.random() * (variance * 2 + 1)));
+      await browseOnlySession(page, browseMinutes);
+
+      log.info(`\n--- Session Summary ---`);
+      log.info(`Browse-only session completed (no reactions)`);
+      return 0;
     }
 
     // Validate that LinkedIn selectors still work
@@ -147,6 +210,7 @@ async function runSession() {
     }
 
     let reactedThisSession = 0;
+    let postsSinceLastNav = 0; // Track posts since last navigation diversion
 
     // Randomize max session duration — vary by ±20% around the configured value
     const variance = Math.floor(config.maxSessionMinutes * 0.2);
@@ -159,9 +223,19 @@ async function runSession() {
       // onPostsFound callback
       async (newPosts) => {
         stats.postsScrolled += newPosts.length;
+        postsSinceLastNav += newPosts.length;
 
         for (const post of newPosts) {
           if (reactedThisSession >= sessionTarget) break;
+
+          // ── Expand "see more" on some posts (#6) — even non-matching ones
+          if (Math.random() < 0.12) {
+            const postEl = page.locator(`div[componentkey="${post.urn}"]`).first();
+            const visible = await postEl.isVisible().catch(() => false);
+            if (visible) {
+              await expandPost(page, postEl);
+            }
+          }
 
           // Check duplicate
           if (db.isAlreadyReacted(post.urn)) continue;
@@ -192,8 +266,22 @@ async function runSession() {
             }
           }
 
+          // ── Visit author profile sometimes (#5) — 15% chance after reacting
+          if (Math.random() < 0.15) {
+            await visitProfile(page, post.author);
+          }
+
           // Delay between reactions
           await sleep(humanDelay(3000, 15000));
+        }
+
+        // ── Random navigation between scroll batches (#9)
+        // Every ~20 posts, do a random navigation to break the pattern
+        if (postsSinceLastNav >= 15 + Math.floor(Math.random() * 10)) {
+          postsSinceLastNav = 0;
+          if (Math.random() < 0.3) {
+            await randomNavigation(page);
+          }
         }
       },
       // shouldStop callback
@@ -204,9 +292,21 @@ async function runSession() {
     printSessionSummary(sessionId, stats, dailyTarget);
 
   } catch (err) {
-    stats.status = 'error';
-    stats.errorMessage = err.message;
-    log.error(`Session error: ${err.message}`);
+    const msg = (err.message || '').toLowerCase();
+
+    // Detect session expiry mid-run (auth redirect, login wall)
+    const isAuthError = msg.includes('login') || msg.includes('authwall')
+      || msg.includes('checkpoint') || msg.includes('/uas/');
+    if (isAuthError) {
+      stats.status = 'error';
+      stats.errorMessage = 'Session expired mid-run';
+      log.warn('LinkedIn session expired during session — ending gracefully.');
+      log.warn('Please re-login via the dashboard before the next session.');
+    } else {
+      stats.status = 'error';
+      stats.errorMessage = err.message;
+      log.error(`Session error: ${err.message}`);
+    }
 
     // Try to take a screenshot on error
     try {
@@ -222,13 +322,29 @@ async function runSession() {
       }
     } catch {} // ignore screenshot errors
 
-    const msg = (err.message || '').toLowerCase();
+    // ── Captcha cooldown (#4) — actually enforce a cooldown period
     if (msg.includes('captcha') || msg.includes('challenge')) {
-      log.warn('CAPTCHA detected — extending cooldown for next session');
+      log.warn('CAPTCHA detected — setting 24-hour cooldown to avoid ban escalation');
+      db.setCooldown('captcha', 24); // 24 hour cooldown
     }
   } finally {
     // Single endSession call — always runs, never duplicated
     db.endSession(sessionId, stats);
+
+    // Report to admin server (fire-and-forget)
+    await reportSession({
+      linkedinName: linkedinIdentity.name,
+      linkedinUrl: linkedinIdentity.url,
+      sessionId,
+      window: isBrowseOnly ? `${windowName}-browse` : windowName,
+      status: stats.status,
+      postsScrolled: stats.postsScrolled,
+      postsMatched: stats.postsMatched,
+      postsReacted: stats.postsReacted,
+      postsSkipped: stats.postsSkipped,
+      startedAt: sessionStartedAt,
+    });
+
     if (context) {
       await context.close().catch(() => {});
     }
@@ -287,6 +403,7 @@ process.on('unhandledRejection', (err) => {
 
 async function daemon() {
   log.info('Daemon mode started. Will auto-trigger sessions during configured windows.');
+  log.info(`Anti-detection: ${config.skipDayPercent}% skip-day chance, ${config.browseOnlyPercent}% browse-only chance, ±${config.windowVarianceMinutes}min window variance`);
   const CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   while (true) {

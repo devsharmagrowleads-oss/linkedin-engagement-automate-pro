@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0c0e1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Growleads Admin - Team Tracker</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- Desktop Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img class="sidebar-logo" src="/favicon.png" alt="Growleads" width="36" height="36">
+        <div>
+          <div class="sidebar-brand-text">Growleads Admin</div>
+          <div class="sidebar-brand-sub">Team Usage Tracker</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="sidebar-item active" data-page="team">Team Overview</button>
+        <button class="sidebar-item" data-page="activity">Activity Log</button>
+        <button class="sidebar-item" data-page="teams">Team Stats</button>
+      </nav>
+    </aside>
+
+    <!-- Mobile Nav -->
+    <nav class="mobile-nav">
+      <button class="mobile-nav-btn active" data-page="team">Team</button>
+      <button class="mobile-nav-btn" data-page="activity">Activity</button>
+      <button class="mobile-nav-btn" data-page="teams">Stats</button>
+    </nav>
+
+    <main class="main-content">
+
+      <!-- Team Overview -->
+      <div id="page-team" class="page active">
+        <div class="page-header">
+          <div class="page-title">Team Overview</div>
+          <div class="page-subtitle">Monitor who is using Growleads and flag inactive members</div>
+        </div>
+        <div class="page-body">
+          <div class="stat-grid">
+            <div class="stat-card">
+              <div class="stat-label">Total Members</div>
+              <div class="stat-value" id="totalMembers">0</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Active Today</div>
+              <div class="stat-value" id="activeToday">0</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Inactive</div>
+              <div class="stat-value stat-danger" id="inactiveCount">0</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Sessions Today</div>
+              <div class="stat-value" id="sessionsToday">0</div>
+            </div>
+          </div>
+
+          <!-- Desktop table -->
+          <div class="card desktop-table">
+            <div class="card-header">
+              <div class="card-title">All Members</div>
+              <button class="btn btn-secondary" onclick="loadUsers()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>Team</th>
+                    <th>LinkedIn Account</th>
+                    <th>Sessions Today</th>
+                    <th>Reactions Today</th>
+                    <th>Total Sessions</th>
+                    <th>Last Active</th>
+                  </tr>
+                </thead>
+                <tbody id="usersTable"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Mobile cards -->
+          <div class="user-cards" id="userCards"></div>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div id="page-activity" class="page">
+        <div class="page-header">
+          <div class="page-title">Activity Log</div>
+          <div class="page-subtitle">Recent sessions across all team members</div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Recent Sessions</div>
+              <button class="btn btn-secondary" onclick="loadActivity()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>User</th>
+                    <th>Team</th>
+                    <th>LinkedIn</th>
+                    <th>Window</th>
+                    <th>Status</th>
+                    <th>Scrolled</th>
+                    <th>Matched</th>
+                    <th>Reacted</th>
+                  </tr>
+                </thead>
+                <tbody id="activityTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Team Stats -->
+      <div id="page-teams" class="page">
+        <div class="page-header">
+          <div class="page-title">Team Stats</div>
+          <div class="page-subtitle">Aggregate performance by team</div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Team</th>
+                    <th>Members</th>
+                    <th>Total Sessions</th>
+                    <th>Total Reactions</th>
+                  </tr>
+                </thead>
+                <tbody id="teamsTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+  <script src="/js/admin.js"></script>
+</body>
+</html>
