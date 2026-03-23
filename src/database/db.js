@@ -63,11 +63,45 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS skip_days (
     date TEXT PRIMARY KEY
   );
+
+  CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    post_urn TEXT NOT NULL,
+    post_url TEXT DEFAULT '',
+    author TEXT,
+    content_snippet TEXT,
+    generated_comment TEXT,
+    status TEXT NOT NULL,
+    skip_reason TEXT,
+    match_level TEXT,
+    matched_keyword TEXT,
+    openai_model TEXT,
+    commented_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_comments_urn ON comments(post_urn);
+  CREATE INDEX IF NOT EXISTS idx_comments_session ON comments(session_id);
+  CREATE INDEX IF NOT EXISTS idx_comments_date ON comments(commented_at);
+
+  CREATE TABLE IF NOT EXISTS comment_daily_targets (
+    date TEXT PRIMARY KEY,
+    target INTEGER NOT NULL,
+    achieved INTEGER DEFAULT 0
+  );
 `);
 
 // Migration: add post_url column if it doesn't exist (for existing databases)
 try {
   db.exec(`ALTER TABLE reactions ADD COLUMN post_url TEXT DEFAULT ''`);
+} catch (e) {
+  // Column already exists — ignore
+}
+
+// Migration: add posts_commented column to sessions
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN posts_commented INTEGER DEFAULT 0`);
 } catch (e) {
   // Column already exists — ignore
 }
@@ -195,6 +229,58 @@ const stmts = {
   isSkipDay: db.prepare(`
     SELECT 1 FROM skip_days WHERE date = ?
   `),
+
+  // Comments
+  insertComment: db.prepare(`
+    INSERT INTO comments (session_id, post_urn, post_url, author, content_snippet, generated_comment, status, skip_reason, match_level, matched_keyword, openai_model)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  isAlreadyCommented: db.prepare(`
+    SELECT 1 FROM comments WHERE post_urn = ? AND status = 'posted'
+  `),
+  getCommentsToday: db.prepare(`
+    SELECT COUNT(*) as count FROM comments WHERE commented_at >= date('now') AND status = 'posted'
+  `),
+  getCommentsPaginated: db.prepare(`
+    SELECT * FROM comments ORDER BY commented_at DESC LIMIT ? OFFSET ?
+  `),
+  getCommentsCount: db.prepare(`
+    SELECT COUNT(*) as count FROM comments WHERE commented_at >= date('now', '-30 days')
+  `),
+  getCommentStatsByDays: db.prepare(`
+    SELECT
+      date(commented_at) as day,
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'posted' THEN 1 ELSE 0 END) as posted,
+      SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+      SUM(CASE WHEN status = 'dry_run' THEN 1 ELSE 0 END) as dry_runs
+    FROM comments
+    WHERE commented_at >= date('now', '-' || ? || ' days')
+    GROUP BY date(commented_at)
+    ORDER BY day DESC
+  `),
+  getRecentPostedComments: db.prepare(`
+    SELECT generated_comment FROM comments
+    WHERE session_id = ? AND status IN ('posted', 'dry_run')
+    ORDER BY commented_at DESC LIMIT 5
+  `),
+
+  // Comment daily targets
+  getOrCreateCommentDailyTarget: db.prepare(`
+    INSERT OR IGNORE INTO comment_daily_targets (date, target, achieved) VALUES (?, ?, 0)
+  `),
+  getCommentDailyTarget: db.prepare(`
+    SELECT * FROM comment_daily_targets WHERE date = ?
+  `),
+  incrementCommentAchieved: db.prepare(`
+    UPDATE comment_daily_targets SET achieved = achieved + 1 WHERE date = ?
+  `),
+
+  // Update session with comment count
+  updateSessionComments: db.prepare(`
+    UPDATE sessions SET posts_commented = ? WHERE id = ?
+  `),
 };
 
 function getTodayStr() {
@@ -223,6 +309,10 @@ function endSession(sessionId, stats) {
     stats.errorMessage || null,
     sessionId
   );
+  // Update comment count separately (migration-safe)
+  try {
+    stmts.updateSessionComments.run(stats.postsCommented || 0, sessionId);
+  } catch {}
 }
 
 // Wrap insert + increment in a transaction (single disk write, atomic)
@@ -316,6 +406,74 @@ function getErrorSessions() {
   return stmts.getErrorSessions.all();
 }
 
+// ── Comment functions ────────────────────────────────────────────────
+
+// Wrap insert + increment in a transaction (atomic)
+const _logCommentTx = db.transaction((sessionId, urn, postUrl, author, snippet, comment, status, skipReason, matchLevel, keyword, model) => {
+  stmts.insertComment.run(sessionId, urn, postUrl, author, snippet, comment, status, skipReason, matchLevel, keyword, model);
+  if (status === 'posted') {
+    stmts.incrementCommentAchieved.run(getTodayStr());
+  }
+});
+
+function logComment(sessionId, post, comment, status, skipReason, matchLevel, keyword, model) {
+  try {
+    _logCommentTx(
+      sessionId,
+      post.urn,
+      post.postUrl || '',
+      post.author || 'Unknown',
+      (post.text || '').substring(0, 200),
+      comment || '',
+      status,
+      skipReason || null,
+      matchLevel || null,
+      keyword || null,
+      model || null
+    );
+  } catch (err) {
+    log.warn(`Failed to log comment: ${err.message}`);
+  }
+}
+
+function isAlreadyCommented(urn) {
+  return !!stmts.isAlreadyCommented.get(urn);
+}
+
+function ensureCommentDailyTarget(min, max) {
+  const today = getTodayStr();
+  const target = min + Math.floor(Math.random() * (max - min + 1));
+  stmts.getOrCreateCommentDailyTarget.run(today, target);
+  return stmts.getCommentDailyTarget.get(today);
+}
+
+function getCommentDailyProgress() {
+  const today = getTodayStr();
+  const target = stmts.getCommentDailyTarget.get(today);
+  const commented = stmts.getCommentsToday.get();
+  return {
+    target: target ? target.target : 0,
+    achieved: commented.count,
+  };
+}
+
+function getRecentPostedComments(sessionId) {
+  return stmts.getRecentPostedComments.all(sessionId).map(r => r.generated_comment);
+}
+
+function getCommentsPaginated(limit, offset) {
+  return stmts.getCommentsPaginated.all(limit, offset);
+}
+
+function getCommentsCount() {
+  const row = stmts.getCommentsCount.get();
+  return row ? row.count : 0;
+}
+
+function getCommentStatsByDays(days) {
+  return stmts.getCommentStatsByDays.all(days);
+}
+
 // Cooldown: set a cooldown that expires at a given ISO timestamp
 function setCooldown(key, hoursFromNow) {
   const until = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
@@ -360,6 +518,15 @@ module.exports = {
   getReactionsCount,
   getRecentSessions,
   getErrorSessions,
+  // Comments
+  logComment,
+  isAlreadyCommented,
+  ensureCommentDailyTarget,
+  getCommentDailyProgress,
+  getRecentPostedComments,
+  getCommentsPaginated,
+  getCommentsCount,
+  getCommentStatsByDays,
   // Cooldown & skip days
   setCooldown,
   isCooldownActive,

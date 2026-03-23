@@ -3,6 +3,7 @@ const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const KEYWORDS_PATH = path.join(__dirname, '..', 'config', 'keywords.json');
+const COMMENTING_PATH = path.join(__dirname, '..', 'config', 'commenting.json');
 
 function loadKeywords() {
   const raw = fs.readFileSync(KEYWORDS_PATH, 'utf-8');
@@ -13,6 +14,22 @@ function loadKeywords() {
   if (!Array.isArray(config.secondary)) config.secondary = [];
 
   return config;
+}
+
+function loadCommenting() {
+  try {
+    const raw = fs.readFileSync(COMMENTING_PATH, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return {
+      persona: 'You are a thoughtful professional who shares practical insights.',
+      bannedPhrases: ['as an AI', 'language model'],
+      minEngagementReactions: 5,
+      minEngagementComments: 2,
+      minLength: 15,
+      maxLength: 300,
+    };
+  }
 }
 
 // Validate IANA timezone identifier
@@ -63,8 +80,19 @@ const config = {
   errorsDir: path.join(__dirname, '..', 'data', 'errors'),
   lockfilePath: path.join(__dirname, '..', 'data', 'session.lock'),
 
-  // Keywords (loaded on demand)
+  // Auto-Comment
+  enableComments: (process.env.ENABLE_COMMENTS || 'false').toLowerCase() === 'true',
+  commentDryRun: (process.env.COMMENT_DRY_RUN || 'false').toLowerCase() === 'true',
+  openaiApiKey: process.env.OPENAI_API_KEY || '',
+  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  dailyCommentMin: parseInt(process.env.DAILY_COMMENT_MIN, 10) || 5,
+  dailyCommentMax: parseInt(process.env.DAILY_COMMENT_MAX, 10) || 10,
+  commentMinGap: parseInt(process.env.COMMENT_MIN_GAP, 10) || 3,
+  commentMaxGap: parseInt(process.env.COMMENT_MAX_GAP, 10) || 8,
+
+  // Keywords & commenting config (loaded on demand)
   loadKeywords,
+  loadCommenting,
 };
 
 module.exports = config;
