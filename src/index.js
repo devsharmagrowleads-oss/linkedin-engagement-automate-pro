@@ -13,6 +13,10 @@ const { humanDelay, sleep, shouldSkip } = require('./behavior/human');
 const { visitProfile, expandPost, randomNavigation, browseOnlySession } = require('./behavior/navigation');
 const { reportSession } = require('./reporting/reporter');
 const db = require('./database/db');
+const { extractExistingComments } = require('./feed/comment-extractor');
+const { commentOnPost } = require('./feed/commenter');
+const { generateComment } = require('./ai/comment-generator');
+const { validateComment } = require('./ai/comment-safety');
 
 // ── Window variance: randomize session windows daily ────────────────
 
@@ -154,6 +158,30 @@ async function runSession() {
   const matcher = new KeywordMatcher(keywordsConfig);
   const reactionSelector = new ReactionSelector(keywordsConfig.reactionMap);
 
+  // ── Auto-Comment setup ──────────────────────────────────────────────
+  const commentingEnabled = config.enableComments && config.openaiApiKey;
+  let commentConfig = null;
+  let commentDailyTarget = null;
+  let sessionCommentTarget = 0;
+
+  if (commentingEnabled) {
+    commentConfig = config.loadCommenting();
+    commentDailyTarget = db.ensureCommentDailyTarget(config.dailyCommentMin, config.dailyCommentMax);
+    const commentProgress = db.getCommentDailyProgress();
+    const commentRemaining = commentDailyTarget.target - commentProgress.achieved;
+
+    // Distribute across remaining sessions
+    const sessionCommentMin = Math.ceil(commentDailyTarget.target / Math.max(1, windowCount));
+    sessionCommentTarget = isBrowseOnly ? 0 : Math.max(sessionCommentMin, Math.ceil(commentRemaining / remainingSessions));
+
+    if (config.commentDryRun) {
+      log.info(`Auto-Comment: DRY RUN mode (generate but don't post)`);
+    }
+    log.info(`Auto-Comment: target ${commentDailyTarget.target}/day | Done: ${commentProgress.achieved} | This session: ~${sessionCommentTarget}`);
+  } else if (config.enableComments && !config.openaiApiKey) {
+    log.warn('Auto-Comment: enabled but OPENAI_API_KEY not set — commenting disabled');
+  }
+
   // Start session tracking
   const sessionId = db.startSession(isBrowseOnly ? `${windowName}-browse` : windowName);
   const stats = {
@@ -161,6 +189,7 @@ async function runSession() {
     postsMatched: 0,
     postsReacted: 0,
     postsSkipped: 0,
+    postsCommented: 0,
     status: 'completed',
     errorMessage: null,
   };
@@ -211,6 +240,12 @@ async function runSession() {
 
     let reactedThisSession = 0;
     let postsSinceLastNav = 0; // Track posts since last navigation diversion
+
+    // Comment tracking
+    let postsSinceLastComment = 0;
+    let sessionCommentsFailed = 0; // consecutive API failures
+    let recentSessionComments = []; // for repetition detection
+    const commentGap = config.commentMinGap + Math.floor(Math.random() * (config.commentMaxGap - config.commentMinGap + 1));
 
     // Randomize max session duration — vary by ±20% around the configured value
     const variance = Math.floor(config.maxSessionMinutes * 0.2);
@@ -273,6 +308,66 @@ async function runSession() {
 
           // Delay between reactions
           await sleep(humanDelay(3000, 15000));
+
+          // ── Auto-Comment decision ─────────────────────────────────
+          postsSinceLastComment++;
+
+          if (commentingEnabled && !isBrowseOnly
+            && sessionCommentsFailed < 3
+            && stats.postsCommented < sessionCommentTarget
+            && postsSinceLastComment >= commentGap
+            && match && match.matched
+            && (post.reactionCount >= commentConfig.minEngagementReactions || post.commentCount >= commentConfig.minEngagementComments)
+            && !db.isAlreadyCommented(post.urn)
+          ) {
+            try {
+              // Locate post element for comment interaction
+              const postEl = page.locator(`div[componentkey="${post.urn}"]`).first();
+              const postParentEl = page.locator(`div[role="listitem"]:has(div[componentkey="${post.urn}"])`).first();
+              const commentPostEl = await postEl.isVisible().catch(() => false) ? postEl : postParentEl;
+
+              // Scrape existing comments for context
+              const existingComments = await extractExistingComments(page, commentPostEl);
+
+              // Generate comment via OpenAI
+              const result = await generateComment(
+                post.text, post.author, existingComments,
+                commentConfig.persona, config.openaiModel, config.openaiApiKey
+              );
+
+              if (result.error) {
+                sessionCommentsFailed++;
+                log.warn(`Comment generation failed: ${result.error}`);
+                db.logComment(sessionId, post, '', 'failed', result.error, match.level, match.keyword, config.openaiModel);
+              } else {
+                // Safety check
+                const safety = validateComment(result.comment, recentSessionComments, commentConfig);
+                if (!safety.valid) {
+                  log.info(`  Comment skipped (${safety.reason}): "${result.comment.substring(0, 50)}..."`);
+                  db.logComment(sessionId, post, result.comment, 'skipped', safety.reason, match.level, match.keyword, result.model);
+                } else {
+                  // Post the comment (or dry run)
+                  const posted = await commentOnPost(page, post, result.comment, config.commentDryRun);
+                  const status = posted.success ? (config.commentDryRun ? 'dry_run' : 'posted') : 'failed';
+                  db.logComment(sessionId, post, result.comment, status, posted.error || null, match.level, match.keyword, result.model);
+
+                  if (posted.success) {
+                    recentSessionComments.push(result.comment);
+                    postsSinceLastComment = 0;
+                    stats.postsCommented++;
+                    sessionCommentsFailed = 0; // reset on success
+                    log.info(`  [Comment ${stats.postsCommented}/${sessionCommentTarget}] → "${post.author}"`);
+                  }
+                }
+              }
+            } catch (commentErr) {
+              log.warn(`Comment error: ${commentErr.message}`);
+              // Don't let comment errors break the session
+            }
+
+            // Extra delay after commenting attempt
+            await sleep(humanDelay(2000, 5000));
+          }
         }
 
         // ── Random navigation between scroll batches (#9)
@@ -342,6 +437,7 @@ async function runSession() {
       postsMatched: stats.postsMatched,
       postsReacted: stats.postsReacted,
       postsSkipped: stats.postsSkipped,
+      postsCommented: stats.postsCommented,
       startedAt: sessionStartedAt,
     });
 
@@ -364,6 +460,9 @@ function printSessionSummary(sessionId, stats, dailyTarget) {
   log.info(`Reactions: ${stats.postsReacted} (${reactionBreakdown || 'none'})`);
   log.info(`Match breakdown: ${matchBreakdown || 'none'}`);
   log.info(`Posts scrolled: ${stats.postsScrolled} | Matched: ${stats.postsMatched} | Skipped: ${stats.postsSkipped}`);
+  if (stats.postsCommented > 0) {
+    log.info(`Comments posted: ${stats.postsCommented}`);
+  }
   log.info(`Daily progress: ${progress.achieved}/${dailyTarget.target}`);
   log.info(`Status: ${stats.status}`);
 }

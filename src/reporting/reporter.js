@@ -30,6 +30,7 @@ async function reportSession(sessionData) {
         postsMatched: sessionData.postsMatched || 0,
         postsReacted: sessionData.postsReacted || 0,
         postsSkipped: sessionData.postsSkipped || 0,
+        postsCommented: sessionData.postsCommented || 0,
         startedAt: sessionData.startedAt,
         endedAt: new Date().toISOString(),
       }),
