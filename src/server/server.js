@@ -23,8 +23,15 @@ app.use((req, res, next) => {
 app.use('/api', (req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     const origin = req.headers.origin || req.headers.referer || '';
-    if (origin && !origin.includes('localhost:') && !origin.includes('127.0.0.1:')) {
-      return res.status(403).json({ error: 'Forbidden: cross-origin request' });
+    if (origin) {
+      try {
+        const url = new URL(origin);
+        if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+          return res.status(403).json({ error: 'Forbidden: cross-origin request' });
+        }
+      } catch {
+        return res.status(403).json({ error: 'Forbidden: invalid origin' });
+      }
     }
   }
   next();

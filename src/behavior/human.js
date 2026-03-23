@@ -123,21 +123,18 @@ async function humanType(page, locator, text) {
   await locator.click();
   await sleep(humanDelay(200, 500));
 
-  let charsSinceLastPause = 0;
-  const pauseInterval = 4 + Math.floor(Math.random() * 5); // pause every 4-8 chars
+  // Type word-by-word using Playwright's built-in per-character delay
+  // This reduces IPC calls from N (chars) to ~N/5 (words) while keeping human-like timing
+  const chunks = text.split(/(\s+)/); // split preserving whitespace
 
-  for (const char of text) {
-    // Variable inter-keystroke delay: gaussian(100, 30), clamped to 50-200ms
+  for (const chunk of chunks) {
+    if (!chunk) continue;
     const delay = Math.max(50, Math.min(200, Math.round(gaussianRandom(100, 30))));
-    await page.keyboard.type(char, { delay: 0 });
-    await sleep(delay);
+    await page.keyboard.type(chunk, { delay });
 
-    charsSinceLastPause++;
-
-    // Occasional word-boundary pause (20% chance every N chars)
-    if (charsSinceLastPause >= pauseInterval && Math.random() < 0.2) {
+    // 15% chance of a thinking pause between words
+    if (chunk.trim() && Math.random() < 0.15) {
       await sleep(humanDelay(300, 800));
-      charsSinceLastPause = 0;
     }
   }
 }

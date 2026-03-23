@@ -49,9 +49,6 @@ const SELECTORS = {
   commentContainer: 'div.comments-comments-list, div[data-test-id="comments-list"], article.comments-comment-item',
   commentItem: 'article.comments-comment-item, div[data-test-id="comment"]',
 
-  // Engagement counts (visible on posts)
-  engagementReactions: 'span.social-details-social-counts__reactions-count, button[aria-label*="reaction" i] span, span[data-test-id="social-actions-count"]',
-  engagementComments: 'button[aria-label*="comment" i] span, span.social-details-social-counts__comments',
 };
 
 /**

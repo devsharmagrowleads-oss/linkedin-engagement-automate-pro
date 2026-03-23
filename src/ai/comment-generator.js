@@ -86,7 +86,7 @@ async function generateComment(postText, author, existingComments, persona, mode
         ],
         max_tokens: 150,
         temperature: 0.9,
-      });
+      }, { timeout: 10000 }); // 10 second timeout
 
       const comment = (response.choices[0]?.message?.content || '').trim();
       const tokensUsed = response.usage?.total_tokens || 0;

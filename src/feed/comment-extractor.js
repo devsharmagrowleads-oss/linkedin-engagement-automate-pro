@@ -5,6 +5,7 @@ const log = require('../utils/logger');
  * Extract existing visible comments from a post.
  * Returns an array of { author, text } for feeding to the LLM as context.
  * Only scrapes what's visible — no "Load more" expansion.
+ * Uses a single evaluate() call for all comments to minimize IPC round-trips.
  *
  * @param {import('playwright').Page} page
  * @param {import('playwright').Locator} postLocator - The post element locator
@@ -12,70 +13,60 @@ const log = require('../utils/logger');
  */
 async function extractExistingComments(page, postLocator) {
   try {
-    // Find comment items within or near this post
-    const commentItems = postLocator.locator(SELECTORS.commentItem);
-    const count = await commentItems.count().catch(() => 0);
+    const comments = await postLocator.evaluate((el, selector) => {
+      const items = el.querySelectorAll(selector);
+      if (!items.length) return [];
 
-    if (count === 0) return [];
+      const results = [];
+      const maxComments = Math.min(items.length, 10);
+      const skipPatterns = /^(Like|Reply|Report|See translation|Edited|\d+\s*(likes?|replies|reactions?)|\d+[dhwmo]\s*$)/i;
 
-    const comments = [];
-    const maxComments = Math.min(count, 10); // Cap at 10
+      for (let i = 0; i < maxComments; i++) {
+        const item = items[i];
 
-    for (let i = 0; i < maxComments; i++) {
-      try {
-        const item = commentItems.nth(i);
-        const visible = await item.isVisible().catch(() => false);
-        if (!visible) continue;
+        // Skip hidden elements
+        const rect = item.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
 
-        const data = await item.evaluate(el => {
-          const text = (el.innerText || '').trim();
-          const lines = text.split('\n').filter(l => l.trim());
+        const text = (item.innerText || '').trim();
+        if (!text) continue;
 
-          // First non-empty line is typically the commenter's name
-          let author = 'Unknown';
-          let commentText = '';
+        const lines = text.split('\n').filter(l => l.trim());
+        let author = 'Unknown';
+        let foundAuthor = false;
+        const contentLines = [];
 
-          // Parse: first line = author, remaining non-UI lines = comment text
-          const skipPatterns = /^(Like|Reply|Report|See translation|Edited|\d+\s*(likes?|replies|reactions?)|\d+[dhwmo]\s*$)/i;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.length < 2) continue;
+          if (skipPatterns.test(trimmed)) continue;
 
-          let foundAuthor = false;
-          const contentLines = [];
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.length < 2) continue;
-            if (skipPatterns.test(trimmed)) continue;
-
-            if (!foundAuthor) {
-              // Author is typically a short name (< 60 chars, no punctuation at end)
-              if (trimmed.length < 60 && !/[.!?]$/.test(trimmed)) {
-                author = trimmed;
-                foundAuthor = true;
-                continue;
-              }
+          if (!foundAuthor) {
+            if (trimmed.length < 60 && !/[.!?]$/.test(trimmed)) {
+              author = trimmed;
+              foundAuthor = true;
+              continue;
             }
-
-            // Skip role/title lines right after author name
-            if (foundAuthor && contentLines.length === 0 && trimmed.length < 80 && !trimmed.includes('.')) {
-              continue; // likely a job title line
-            }
-
-            contentLines.push(trimmed);
           }
 
-          commentText = contentLines.join(' ').substring(0, 500);
-          return { author, text: commentText };
-        });
+          // Skip role/title lines right after author name
+          if (foundAuthor && contentLines.length === 0 && trimmed.length < 80 && !trimmed.includes('.')) {
+            continue;
+          }
 
-        if (data && data.text && data.text.length > 5) {
-          comments.push(data);
+          contentLines.push(trimmed);
         }
-      } catch {
-        // Skip individual comment extraction errors
-      }
-    }
 
-    return comments;
+        const commentText = contentLines.join(' ').substring(0, 500);
+        if (commentText.length > 5) {
+          results.push({ author, text: commentText });
+        }
+      }
+
+      return results;
+    }, SELECTORS.commentItem);
+
+    return comments || [];
   } catch (err) {
     log.warn(`Failed to extract existing comments: ${err.message}`);
     return [];

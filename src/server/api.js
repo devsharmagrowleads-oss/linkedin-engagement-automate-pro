@@ -308,7 +308,17 @@ router.get('/settings', (req, res) => {
 
 router.post('/settings', (req, res) => {
   try {
-    const settings = req.body;
+    // Enforce whitelist: only accept known setting keys from the request body
+    const settings = {};
+    for (const key of ALLOWED_SETTINGS) {
+      if (req.body[key] !== undefined) {
+        settings[key] = req.body[key];
+      }
+    }
+    // OPENAI_API_KEY is write-only (not in ALLOWED_SETTINGS for GET, but accepted in POST)
+    if (req.body.OPENAI_API_KEY) {
+      settings.OPENAI_API_KEY = req.body.OPENAI_API_KEY;
+    }
 
     // Validate time windows
     for (const key of ['MORNING_WINDOW', 'AFTERNOON_WINDOW', 'EVENING_WINDOW']) {

@@ -84,6 +84,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_comments_urn ON comments(post_urn);
   CREATE INDEX IF NOT EXISTS idx_comments_session ON comments(session_id);
   CREATE INDEX IF NOT EXISTS idx_comments_date ON comments(commented_at);
+  CREATE INDEX IF NOT EXISTS idx_comments_date_status ON comments(commented_at, status);
 
   CREATE TABLE IF NOT EXISTS comment_daily_targets (
     date TEXT PRIMARY KEY,
