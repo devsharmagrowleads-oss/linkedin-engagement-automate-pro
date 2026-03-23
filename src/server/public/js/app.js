@@ -39,7 +39,9 @@ document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
     document.getElementById(`page-${page}`).classList.add('active');
 
     if (page === 'reactions') loadReactions();
+    if (page === 'comments') loadComments();
     if (page === 'keywords') loadKeywords();
+    if (page === 'persona') loadPersona();
     if (page === 'settings') loadSettings();
     if (page === 'sessions') loadSessions();
 
@@ -103,6 +105,16 @@ async function refreshDashboard() {
     document.getElementById('todayTarget').textContent = `Target: ${status.daily.target}`;
     const pct = status.daily.target > 0 ? (status.daily.achieved / status.daily.target * 100) : 0;
     document.getElementById('todayProgress').style.width = `${Math.min(100, pct)}%`;
+
+    // Comment stats
+    const commentCard = document.getElementById('commentStatCard');
+    if (status.commentsEnabled || (status.commentDaily && status.commentDaily.target > 0)) {
+      commentCard.style.display = '';
+      document.getElementById('commentCount').textContent = status.commentDaily.achieved;
+      document.getElementById('commentTarget').textContent = `Target: ${status.commentDaily.target}`;
+      const commentPct = status.commentDaily.target > 0 ? (status.commentDaily.achieved / status.commentDaily.target * 100) : 0;
+      document.getElementById('commentProgress').style.width = `${Math.min(100, commentPct)}%`;
+    }
 
     document.getElementById('sessionsCount').textContent = status.sessionsToday;
     document.getElementById('sessionsDetail').textContent = `${status.completedToday} completed`;
@@ -365,6 +377,13 @@ async function loadSettings() {
     const el = document.getElementById(`set-${key}`);
     if (el) el.value = value;
   }
+  // API key field is not returned by GET /settings (security)
+  // Show placeholder to indicate if one is set
+  const status = await api('GET', '/status');
+  const apiKeyEl = document.getElementById('set-OPENAI_API_KEY');
+  if (apiKeyEl && status.hasOpenAIKey) {
+    apiKeyEl.placeholder = 'sk-... (key is set)';
+  }
 }
 
 async function saveSettings() {
@@ -372,17 +391,127 @@ async function saveSettings() {
     'MORNING_WINDOW', 'AFTERNOON_WINDOW', 'EVENING_WINDOW',
     'DAILY_TARGET_MIN', 'DAILY_TARGET_MAX',
     'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'TIMEZONE',
-    'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT'
+    'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
+    'ENABLE_COMMENTS', 'COMMENT_DRY_RUN', 'OPENAI_MODEL',
+    'DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX',
+    'COMMENT_MIN_GAP', 'COMMENT_MAX_GAP',
   ];
   const settings = {};
   for (const key of fields) {
     const el = document.getElementById(`set-${key}`);
     if (el && el.value) settings[key] = el.value;
   }
+  // Only include API key if user typed a new one
+  const apiKeyEl = document.getElementById('set-OPENAI_API_KEY');
+  if (apiKeyEl && apiKeyEl.value && !apiKeyEl.value.startsWith('sk-...')) {
+    settings['OPENAI_API_KEY'] = apiKeyEl.value;
+  }
   try {
     await api('POST', '/settings', settings);
     toast('Settings saved');
   } catch { toast('Failed to save settings', 'error'); }
+}
+
+// ── Comments Page ───────────────────────────────────────────────────
+
+let commentsOffset = 0;
+
+async function loadComments() {
+  commentsOffset = 0;
+  const data = await api('GET', '/comments?limit=50&offset=0');
+  renderAllComments(data.comments, false);
+}
+
+async function loadMoreComments() {
+  commentsOffset += 50;
+  const data = await api('GET', `/comments?limit=50&offset=${commentsOffset}`);
+  renderAllComments(data.comments, true);
+}
+
+function renderAllComments(comments, append) {
+  const tbody = document.getElementById('allComments');
+  const html = comments.map(c => {
+    const statusClass = c.status === 'posted' ? 'completed' : c.status === 'skipped' ? 'warning' : c.status === 'dry_run' ? 'idle' : 'error';
+    return `<tr class="clickable-row" data-url="${escapeHtml(c.post_url || c.post_urn)}" title="Click to view post on LinkedIn">
+      <td>${formatTime(c.commented_at)}</td>
+      <td>${escapeHtml(c.author || '')}</td>
+      <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);">${escapeHtml(c.generated_comment || '')}</td>
+      <td><span class="badge badge-${statusClass}"><span class="dot"></span> ${escapeHtml(c.status)}</span></td>
+      <td style="color:var(--text-muted);font-size:12px;">${escapeHtml(c.skip_reason || '')}</td>
+    </tr>`;
+  }).join('');
+  if (append) {
+    tbody.insertAdjacentHTML('beforeend', html);
+  } else {
+    tbody.innerHTML = html || '<tr><td colspan="5" class="empty-state">No comments yet</td></tr>';
+  }
+}
+
+// ── Persona Page ────────────────────────────────────────────────────
+
+let personaData = {};
+let bannedPhrasesList = [];
+
+async function loadPersona() {
+  try {
+    personaData = await api('GET', '/persona');
+    document.getElementById('personaText').value = personaData.persona || '';
+    document.getElementById('persona-minReactions').value = personaData.minEngagementReactions || 5;
+    document.getElementById('persona-minComments').value = personaData.minEngagementComments || 2;
+    document.getElementById('persona-minLength').value = personaData.minLength || 15;
+    document.getElementById('persona-maxLength').value = personaData.maxLength || 300;
+
+    bannedPhrasesList = personaData.bannedPhrases || [];
+    renderBannedTags();
+  } catch { toast('Failed to load persona', 'error'); }
+}
+
+function renderBannedTags() {
+  const container = document.getElementById('bannedTags');
+  const input = container.querySelector('.tags-input');
+  container.querySelectorAll('.tag').forEach(t => t.remove());
+  for (const phrase of bannedPhrasesList) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `${escapeHtml(phrase)} <span class="remove" data-tag-type="banned">&times;</span>`;
+    container.insertBefore(tag, input);
+  }
+}
+
+function handleBannedInput(e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const val = e.target.value.trim();
+  if (!val) return;
+  bannedPhrasesList.push(val);
+  renderBannedTags();
+  e.target.value = '';
+}
+
+// Handle banned phrase tag removal
+document.addEventListener('click', (e) => {
+  const removeBtn = e.target.closest('.remove[data-tag-type="banned"]');
+  if (removeBtn) {
+    const tag = removeBtn.parentElement;
+    const text = tag.textContent.replace('\u00d7', '').trim();
+    bannedPhrasesList = bannedPhrasesList.filter(p => p !== text);
+    tag.remove();
+  }
+});
+
+async function savePersona() {
+  const data = {
+    persona: document.getElementById('personaText').value,
+    bannedPhrases: bannedPhrasesList,
+    minEngagementReactions: parseInt(document.getElementById('persona-minReactions').value) || 5,
+    minEngagementComments: parseInt(document.getElementById('persona-minComments').value) || 2,
+    minLength: parseInt(document.getElementById('persona-minLength').value) || 15,
+    maxLength: parseInt(document.getElementById('persona-maxLength').value) || 300,
+  };
+  try {
+    await api('POST', '/persona', data);
+    toast('Persona saved');
+  } catch { toast('Failed to save persona', 'error'); }
 }
 
 // ── Sessions Page ───────────────────────────────────────────────────
@@ -391,7 +520,7 @@ async function loadSessions() {
   const data = await api('GET', '/sessions');
   const tbody = document.getElementById('sessionHistory');
   if (!data.sessions.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No sessions yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No sessions yet</td></tr>';
     return;
   }
   tbody.innerHTML = data.sessions.map(s => `<tr>
@@ -402,6 +531,7 @@ async function loadSessions() {
     <td>${Number(s.posts_scrolled) || 0}</td>
     <td>${Number(s.posts_matched) || 0}</td>
     <td style="font-weight:600;">${Number(s.posts_reacted) || 0}</td>
+    <td style="color:var(--violet-400);">${Number(s.posts_commented) || 0}</td>
     <td>${Number(s.posts_skipped) || 0}</td>
     <td><span class="badge badge-${s.status === 'completed' ? 'completed' : s.status === 'error' ? 'error' : 'idle'}"><span class="dot"></span> ${escapeHtml(s.status)}</span></td>
   </tr>`).join('');

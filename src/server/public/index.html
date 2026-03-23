@@ -31,6 +31,10 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
           Reactions
         </button>
+        <button class="sidebar-item" data-page="comments">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Comments
+        </button>
         <button class="sidebar-item" data-page="sessions">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           Sessions
@@ -40,6 +44,10 @@
         <button class="sidebar-item" data-page="keywords">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
           Keywords
+        </button>
+        <button class="sidebar-item" data-page="persona">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          AI Persona
         </button>
         <button class="sidebar-item" data-page="settings">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -108,6 +116,14 @@
                 <div class="progress-fill" id="todayProgress" style="width: 0%"></div>
               </div>
               <div class="stat-detail" id="todayTarget">Target: 0</div>
+            </div>
+            <div class="stat-card" id="commentStatCard" style="display:none;">
+              <div class="stat-label">Today's Comments</div>
+              <div class="stat-value" id="commentCount">0</div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="commentProgress" style="width: 0%; background: var(--violet-400);"></div>
+              </div>
+              <div class="stat-detail" id="commentTarget">Target: 0</div>
             </div>
             <div class="stat-card">
               <div class="stat-label">Sessions Today</div>
@@ -192,6 +208,100 @@
               <button class="btn btn-ghost" id="loadMoreBtn" onclick="loadMoreReactions()">Load More</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ═══ Comments Page ═══ -->
+      <div id="page-comments" class="page">
+        <div class="page-header">
+          <div class="page-title">Comments</div>
+          <div class="page-subtitle">AI-generated comments posted by the system</div>
+        </div>
+        <div class="page-body">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">All Comments</div>
+              <button class="btn btn-secondary" onclick="loadComments()">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Author</th>
+                    <th>Comment</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="allComments"></tbody>
+              </table>
+            </div>
+            <div style="padding: 12px 16px; text-align: center; border-top: 1px solid var(--border-color);">
+              <button class="btn btn-ghost" id="loadMoreCommentsBtn" onclick="loadMoreComments()">Load More</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ Persona Page ═══ -->
+      <div id="page-persona" class="page">
+        <div class="page-header">
+          <div class="page-title">AI Persona</div>
+          <div class="page-subtitle">Configure the AI commenting persona and safety rules</div>
+        </div>
+        <div class="page-body">
+          <div class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Persona Prompt</div>
+              <div class="card" style="padding: 16px;">
+                <textarea id="personaText" class="form-textarea" rows="6" placeholder="Describe the commenting persona..."></textarea>
+                <div class="section-footer">This shapes how the AI writes comments. Be specific about tone, expertise, and style.</div>
+              </div>
+            </div>
+            <div>
+              <div class="section-header">Banned Phrases</div>
+              <div class="card" style="padding: 16px;">
+                <div id="bannedTags" class="tags-container">
+                  <input type="text" class="tags-input" placeholder="Type and press Enter..." onkeydown="handleBannedInput(event)">
+                </div>
+                <div class="section-footer">Comments containing these phrases will be blocked.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Engagement Thresholds</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Min Reactions</label>
+                  <input type="number" class="form-input" id="persona-minReactions" placeholder="5">
+                </div>
+                <div class="form-row">
+                  <label>Min Comments</label>
+                  <input type="number" class="form-input" id="persona-minComments" placeholder="2">
+                </div>
+              </div>
+              <div class="section-footer">Post must have at least this many reactions OR comments to be eligible.</div>
+            </div>
+            <div>
+              <div class="section-header">Comment Length Bounds</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Min Length</label>
+                  <input type="number" class="form-input" id="persona-minLength" placeholder="15">
+                </div>
+                <div class="form-row">
+                  <label>Max Length</label>
+                  <input type="number" class="form-input" id="persona-maxLength" placeholder="300">
+                </div>
+              </div>
+              <div class="section-footer">Comments outside this range are rejected.</div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="savePersona()">Save Persona</button>
         </div>
       </div>
 
@@ -326,6 +436,57 @@
             </div>
           </div>
 
+          <div class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Auto-Comment</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Enable Comments</label>
+                  <select class="form-input" id="set-ENABLE_COMMENTS">
+                    <option value="false">Disabled</option>
+                    <option value="true">Enabled</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>Dry Run Mode</label>
+                  <select class="form-input" id="set-COMMENT_DRY_RUN">
+                    <option value="false">Off</option>
+                    <option value="true">On (log only)</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>OpenAI API Key</label>
+                  <input type="password" class="form-input" id="set-OPENAI_API_KEY" placeholder="sk-...">
+                </div>
+                <div class="form-row">
+                  <label>OpenAI Model</label>
+                  <input type="text" class="form-input" id="set-OPENAI_MODEL" placeholder="gpt-4o-mini">
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="section-header">Comment Targets</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Min Daily Comments</label>
+                  <input type="number" class="form-input" id="set-DAILY_COMMENT_MIN" placeholder="5">
+                </div>
+                <div class="form-row">
+                  <label>Max Daily Comments</label>
+                  <input type="number" class="form-input" id="set-DAILY_COMMENT_MAX" placeholder="10">
+                </div>
+                <div class="form-row">
+                  <label>Min Post Gap</label>
+                  <input type="number" class="form-input" id="set-COMMENT_MIN_GAP" placeholder="3">
+                </div>
+                <div class="form-row">
+                  <label>Max Post Gap</label>
+                  <input type="number" class="form-input" id="set-COMMENT_MAX_GAP" placeholder="8">
+                </div>
+              </div>
+            </div>
+          </div>
+
           <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
         </div>
       </div>
@@ -353,6 +514,7 @@
                     <th>Scrolled</th>
                     <th>Matched</th>
                     <th>Reacted</th>
+                    <th>Comments</th>
                     <th>Skipped</th>
                     <th>Status</th>
                   </tr>

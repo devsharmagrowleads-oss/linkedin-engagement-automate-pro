@@ -51,6 +51,10 @@ const ALLOWED_SETTINGS = [
   'TIMEZONE', 'LOCALE', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
   'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES',
   'USER_NAME', 'TEAM', 'ADMIN_API_URL', 'ADMIN_API_KEY',
+  // Comment settings (OPENAI_API_KEY intentionally excluded — security)
+  'ENABLE_COMMENTS', 'COMMENT_DRY_RUN', 'OPENAI_MODEL',
+  'DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX',
+  'COMMENT_MIN_GAP', 'COMMENT_MAX_GAP',
 ];
 
 // ── Cached checks for /status hot path ──────────────────────────────
@@ -86,6 +90,12 @@ router.get('/status', (req, res) => {
     const profileExists = checkProfileExists();
     const needsRelogin = !profileExists;
 
+    // Comment progress
+    let commentDaily = { target: 0, achieved: 0 };
+    try {
+      commentDaily = db.getCommentDailyProgress();
+    } catch {}
+
     res.json({
       status: running ? 'running' : 'idle',
       lockActive: lockExists,
@@ -96,6 +106,12 @@ router.get('/status', (req, res) => {
         target: progress.target || 0,
         achieved: progress.achieved || 0,
       },
+      commentDaily: {
+        target: commentDaily.target || 0,
+        achieved: commentDaily.achieved || 0,
+      },
+      commentsEnabled: config.enableComments,
+      hasOpenAIKey: !!config.openaiApiKey,
       sessionsToday: sessions.length,
       completedToday: sessions.filter(s => s.status === 'completed').length,
       currentSession: running || null,
@@ -199,6 +215,73 @@ router.post('/keywords', (req, res) => {
   }
 });
 
+// ── Comments ─────────────────────────────────────────────────────────
+
+router.get('/comments', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+    const comments = db.getCommentsPaginated(limit, offset);
+    const total = db.getCommentsCount();
+    res.json({ comments, total });
+  } catch (err) {
+    log.error(`Comments error: ${err.message}`);
+    res.status(500).json({ error: 'Failed to get comments' });
+  }
+});
+
+router.get('/comment-stats', (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 7, 365);
+    const stats = db.getCommentStatsByDays(days);
+    res.json({ stats });
+  } catch (err) {
+    log.error(`Comment stats error: ${err.message}`);
+    res.status(500).json({ error: 'Failed to get comment stats' });
+  }
+});
+
+// ── Persona / Commenting Config ──────────────────────────────────────
+
+const COMMENTING_PATH = path.join(__dirname, '..', '..', 'config', 'commenting.json');
+
+router.get('/persona', (req, res) => {
+  try {
+    const raw = fs.readFileSync(COMMENTING_PATH, 'utf-8');
+    res.json(JSON.parse(raw));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to read commenting config' });
+  }
+});
+
+router.post('/persona', (req, res) => {
+  try {
+    const data = req.body;
+
+    // Validate
+    if (typeof data.persona !== 'string' || data.persona.trim().length < 10) {
+      return res.status(400).json({ error: 'Persona must be at least 10 characters' });
+    }
+
+    const clean = {
+      persona: data.persona.trim().substring(0, 2000),
+      bannedPhrases: Array.isArray(data.bannedPhrases)
+        ? data.bannedPhrases.filter(p => typeof p === 'string' && p.trim()).map(p => p.trim())
+        : ['as an AI', 'language model'],
+      minEngagementReactions: Math.max(0, parseInt(data.minEngagementReactions) || 5),
+      minEngagementComments: Math.max(0, parseInt(data.minEngagementComments) || 2),
+      minLength: Math.max(5, parseInt(data.minLength) || 15),
+      maxLength: Math.min(1000, parseInt(data.maxLength) || 300),
+    };
+
+    fs.writeFileSync(COMMENTING_PATH, JSON.stringify(clean, null, 2));
+    log.info('Commenting config updated via dashboard');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save commenting config' });
+  }
+});
+
 // ── Settings (.env) ─────────────────────────────────────────────────
 
 const ENV_PATH = path.join(__dirname, '..', '..', '.env');
@@ -251,7 +334,19 @@ router.post('/settings', (req, res) => {
       }
     }
 
-    const s = (key, def) => sanitizeValue(settings[key] || def);
+    // Read existing .env to preserve values not sent by the form (like OPENAI_API_KEY)
+    let existingEnv = {};
+    try {
+      const raw = fs.readFileSync(ENV_PATH, 'utf-8');
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const [key, ...rest] = trimmed.split('=');
+        existingEnv[key.trim()] = rest.join('=').trim();
+      }
+    } catch {}
+
+    const s = (key, def) => sanitizeValue(settings[key] || existingEnv[key] || def);
 
     const lines = [
       '# Session time windows (HH:MM-HH:MM)',
@@ -293,6 +388,16 @@ router.post('/settings', (req, res) => {
       `TEAM=${s('TEAM', 'default')}`,
       `ADMIN_API_URL=${s('ADMIN_API_URL', '')}`,
       `ADMIN_API_KEY=${s('ADMIN_API_KEY', '')}`,
+      '',
+      '# Auto-Comment (OpenAI)',
+      `ENABLE_COMMENTS=${s('ENABLE_COMMENTS', 'false')}`,
+      `COMMENT_DRY_RUN=${s('COMMENT_DRY_RUN', 'false')}`,
+      `OPENAI_API_KEY=${s('OPENAI_API_KEY', '')}`,
+      `OPENAI_MODEL=${s('OPENAI_MODEL', 'gpt-4o-mini')}`,
+      `DAILY_COMMENT_MIN=${s('DAILY_COMMENT_MIN', '5')}`,
+      `DAILY_COMMENT_MAX=${s('DAILY_COMMENT_MAX', '10')}`,
+      `COMMENT_MIN_GAP=${s('COMMENT_MIN_GAP', '3')}`,
+      `COMMENT_MAX_GAP=${s('COMMENT_MAX_GAP', '8')}`,
       '',
     ];
 
