@@ -8,10 +8,12 @@ try {
 }
 
 let client = null;
+let cachedKey = null;
 
 function getClient(apiKey) {
-  if (!client && OpenAI && apiKey) {
+  if (apiKey && apiKey !== cachedKey && OpenAI) {
     client = new OpenAI({ apiKey });
+    cachedKey = apiKey;
   }
   return client;
 }
@@ -21,14 +23,15 @@ function getClient(apiKey) {
  */
 function buildPrompt(postText, author, existingComments, persona) {
   const systemParts = [
-    persona,
-    '',
     'Write a brief LinkedIn comment (1-3 sentences) on the following post. Your comment should:',
     '- Add value to the conversation (a perspective, question, or insight)',
     '- Sound natural and conversational, not generic or templated',
     '- Never reveal you are AI or automated',
     '- Never use hashtags or excessive punctuation',
     '- Be between 15-300 characters',
+    '',
+    'Your persona/voice:',
+    persona,
   ];
 
   const userParts = [`Post by ${author}:`, postText, ''];
@@ -118,7 +121,6 @@ async function generateComment(postText, author, existingComments, persona, mode
     }
   }
 
-  return { error: 'Max retries exceeded', code: 'RETRY_EXHAUSTED' };
 }
 
 module.exports = { generateComment };

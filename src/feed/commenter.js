@@ -1,6 +1,5 @@
 const SELECTORS = require('./selectors');
-const { humanClick, humanDelay, sleep } = require('../behavior/human');
-const { humanType, thinkingDelay } = require('../behavior/human');
+const { humanClick, humanDelay, sleep, humanType, thinkingDelay } = require('../behavior/human');
 const log = require('../utils/logger');
 
 /**
@@ -90,11 +89,7 @@ async function commentOnPost(page, post, commentText, dryRun) {
       return { success: false, error: 'Comment input not found after retry' };
     }
 
-    // Click to focus the input
-    await humanClick(page, commentInput);
-    await sleep(humanDelay(300, 600));
-
-    // Type the comment with human-like keystrokes
+    // Type the comment with human-like keystrokes (humanType clicks to focus internally)
     await humanType(page, commentInput, commentText);
 
     // Brief review pause (simulating reading what was typed before submitting)

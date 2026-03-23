@@ -316,15 +316,13 @@ async function runSession() {
             && sessionCommentsFailed < 3
             && stats.postsCommented < sessionCommentTarget
             && postsSinceLastComment >= commentGap
-            && match && match.matched
+            && match
             && (post.reactionCount >= commentConfig.minEngagementReactions || post.commentCount >= commentConfig.minEngagementComments)
             && !db.isAlreadyCommented(post.urn)
           ) {
             try {
-              // Locate post element for comment interaction
-              const postEl = page.locator(`div[componentkey="${post.urn}"]`).first();
-              const postParentEl = page.locator(`div[role="listitem"]:has(div[componentkey="${post.urn}"])`).first();
-              const commentPostEl = await postEl.isVisible().catch(() => false) ? postEl : postParentEl;
+              // Locate post element for comment scraping
+              const commentPostEl = page.locator(`div[componentkey="${post.urn}"]`).first();
 
               // Scrape existing comments for context
               const existingComments = await extractExistingComments(page, commentPostEl);
@@ -353,6 +351,7 @@ async function runSession() {
 
                   if (posted.success) {
                     recentSessionComments.push(result.comment);
+                    if (recentSessionComments.length > 5) recentSessionComments.shift();
                     postsSinceLastComment = 0;
                     stats.postsCommented++;
                     sessionCommentsFailed = 0; // reset on success
