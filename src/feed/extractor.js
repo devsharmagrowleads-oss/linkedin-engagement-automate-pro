@@ -97,7 +97,21 @@ async function extractPost(postLocator) {
       }
       postText = contentLines.join(' ').substring(0, 1000);
 
-      return { author, postText, postUrl };
+      // Extract engagement counts from post text
+      let reactionCount = 0;
+      let commentCount = 0;
+
+      // Look for patterns like "42 reactions", "12 comments", "1,234 likes"
+      const reactionMatch = text.match(/(\d[\d,]*)\s*(reactions?|likes?)/i);
+      if (reactionMatch) {
+        reactionCount = parseInt(reactionMatch[1].replace(/,/g, ''), 10) || 0;
+      }
+      const commentMatch = text.match(/(\d[\d,]*)\s*comments?/i);
+      if (commentMatch) {
+        commentCount = parseInt(commentMatch[1].replace(/,/g, ''), 10) || 0;
+      }
+
+      return { author, postText, postUrl, reactionCount, commentCount };
     });
 
     if (!postData) return null;
@@ -110,6 +124,8 @@ async function extractPost(postLocator) {
       author: (postData.author || 'Unknown').trim(),
       text: cleanText,
       postUrl: (postData.postUrl || '').trim(),
+      reactionCount: postData.reactionCount || 0,
+      commentCount: postData.commentCount || 0,
     };
   } catch (err) {
     log.warn(`Post extraction failed: ${err.message}`);

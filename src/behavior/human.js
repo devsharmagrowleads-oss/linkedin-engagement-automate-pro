@@ -110,6 +110,52 @@ function shouldSkip(remainingPool, remainingQuota) {
   return Math.random() < 0.07; // ~7% skip rate
 }
 
+/**
+ * Type text with human-like keystroke delays
+ * Simulates natural typing: variable inter-key intervals with occasional pauses
+ *
+ * @param {import('playwright').Page} page
+ * @param {import('playwright').Locator} locator - The input element to type into
+ * @param {string} text - Text to type
+ */
+async function humanType(page, locator, text) {
+  // Click to focus
+  await locator.click();
+  await sleep(humanDelay(200, 500));
+
+  let charsSinceLastPause = 0;
+  const pauseInterval = 4 + Math.floor(Math.random() * 5); // pause every 4-8 chars
+
+  for (const char of text) {
+    // Variable inter-keystroke delay: gaussian(100, 30), clamped to 50-200ms
+    const delay = Math.max(50, Math.min(200, Math.round(gaussianRandom(100, 30))));
+    await page.keyboard.type(char, { delay: 0 });
+    await sleep(delay);
+
+    charsSinceLastPause++;
+
+    // Occasional word-boundary pause (20% chance every N chars)
+    if (charsSinceLastPause >= pauseInterval && Math.random() < 0.2) {
+      await sleep(humanDelay(300, 800));
+      charsSinceLastPause = 0;
+    }
+  }
+}
+
+/**
+ * Simulate thinking delay before typing a comment
+ * Represents the time a human would take to formulate a response
+ *
+ * @param {number} commentLength - Length of the comment to be typed
+ * @returns {number} Delay in milliseconds
+ */
+function thinkingDelay(commentLength) {
+  // Base: 3-8 seconds, with slight scaling by comment length
+  const base = humanDelay(3000, 8000);
+  const lengthFactor = Math.min(commentLength / 200, 1) * 2000; // up to 2s extra
+  return base + Math.round(lengthFactor * Math.random());
+}
+
 module.exports = {
   gaussianRandom,
   humanDelay,
@@ -118,4 +164,6 @@ module.exports = {
   humanScroll,
   humanClick,
   shouldSkip,
+  humanType,
+  thinkingDelay,
 };

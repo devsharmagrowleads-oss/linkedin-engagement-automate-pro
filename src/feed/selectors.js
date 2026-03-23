@@ -41,6 +41,17 @@ const SELECTORS = {
     '[aria-label*="Sponsored"]',
   ],
   promotedText: 'Promoted',
+
+  // Comment-related selectors
+  commentButton: 'button[aria-label*="Comment"], button[aria-label*="comment"]',
+  commentInput: 'div[role="textbox"][aria-label*="comment" i], div[role="textbox"][contenteditable="true"], div.ql-editor[contenteditable="true"]',
+  commentSubmit: 'button[aria-label*="Post" i].comments-comment-box__submit-button, button.comments-comment-box__submit-button, button[type="submit"][aria-label*="Post" i]',
+  commentContainer: 'div.comments-comments-list, div[data-test-id="comments-list"], article.comments-comment-item',
+  commentItem: 'article.comments-comment-item, div[data-test-id="comment"]',
+
+  // Engagement counts (visible on posts)
+  engagementReactions: 'span.social-details-social-counts__reactions-count, button[aria-label*="reaction" i] span, span[data-test-id="social-actions-count"]',
+  engagementComments: 'button[aria-label*="comment" i] span, span.social-details-social-counts__comments',
 };
 
 /**
