@@ -47,10 +47,10 @@ async function manualLogin() {
     if (!loggedIn) return;
 
     // Validate the session
-    const valid = await validateSession(page);
-    if (valid) {
-      log.success('Login successful! Session has been saved.');
-      log.info('You can now run "npm start" to begin automated sessions.');
+    const result = await validateSession(page);
+    if (result.valid) {
+      log.success(`Login successful! Logged in as: ${result.linkedinName || 'Unknown'}`);
+      log.info('You can now run "npm run dashboard" to start the dashboard.');
     } else {
       log.error('Login appeared to succeed but session validation failed.');
       log.info('Please try again with "npm run login".');

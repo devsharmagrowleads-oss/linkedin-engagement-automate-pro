@@ -64,6 +64,8 @@ db.exec(`
     date TEXT PRIMARY KEY
   );
 
+  -- post_urn is NOT UNIQUE because a post can have multiple attempts
+  -- (e.g. failed then succeeded). Dedup is handled at application level via isAlreadyCommented.
   CREATE TABLE IF NOT EXISTS comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
@@ -91,6 +93,8 @@ db.exec(`
     target INTEGER NOT NULL,
     achieved INTEGER DEFAULT 0
   );
+
+;
 `);
 
 // Migration: add post_url column if it doesn't exist (for existing databases)
@@ -166,11 +170,11 @@ const stmts = {
   pruneOldReactions: db.prepare(`
     DELETE FROM reactions WHERE reacted_at < datetime('now', '-30 days')
   `),
-
-  // API queries (previously inline in api.js)
-  getLastError: db.prepare(`
-    SELECT error_message FROM sessions
-    WHERE status = 'error' ORDER BY started_at DESC LIMIT 1
+  pruneOldComments: db.prepare(`
+    DELETE FROM comments WHERE commented_at < datetime('now', '-90 days')
+  `),
+  pruneOldSchedules: db.prepare(`
+    DELETE FROM skip_days WHERE date < date('now', '-90 days')
   `),
 
   getStatsByDays: db.prepare(`
@@ -261,12 +265,6 @@ const stmts = {
     GROUP BY date(commented_at)
     ORDER BY day DESC
   `),
-  getRecentPostedComments: db.prepare(`
-    SELECT generated_comment FROM comments
-    WHERE session_id = ? AND status IN ('posted', 'dry_run')
-    ORDER BY commented_at DESC LIMIT 5
-  `),
-
   // Comment daily targets
   getOrCreateCommentDailyTarget: db.prepare(`
     INSERT OR IGNORE INTO comment_daily_targets (date, target, achieved) VALUES (?, ?, 0)
@@ -282,6 +280,24 @@ const stmts = {
   updateSessionComments: db.prepare(`
     UPDATE sessions SET posts_commented = ? WHERE id = ?
   `),
+
+  // Force-end stale running sessions (cleanup after crash/kill)
+  forceEndRunningSessions: db.prepare(`
+    UPDATE sessions SET status = 'stopped', ended_at = datetime('now'), error_message = 'Process terminated'
+    WHERE status = 'running'
+  `),
+
+  // Force-end a specific session
+  forceEndSession: db.prepare(`
+    UPDATE sessions SET status = 'stopped', ended_at = datetime('now'), error_message = ?
+    WHERE id = ? AND status = 'running'
+  `),
+
+  // Account maturity: first-ever session date
+  getFirstSessionDate: db.prepare(`
+    SELECT MIN(date) as first_date FROM sessions
+  `),
+
 };
 
 function getTodayStr() {
@@ -375,12 +391,16 @@ function pruneOldData() {
   if (result.changes > 0) {
     log.info(`Pruned ${result.changes} old reaction records (>30 days)`);
   }
+  // Prune old comments (>90 days)
+  const commentResult = stmts.pruneOldComments.run();
+  if (commentResult.changes > 0) {
+    log.info(`Pruned ${commentResult.changes} old comment records (>90 days)`);
+  }
+  // Prune old skip_days records (>90 days)
+  stmts.pruneOldSchedules.run();
 }
 
 // API query functions (encapsulated — api.js should never use db directly)
-function getLastError() {
-  return stmts.getLastError.get();
-}
 
 function getStatsByDays(days) {
   return stmts.getStatsByDays.all(days);
@@ -458,10 +478,6 @@ function getCommentDailyProgress() {
   };
 }
 
-function getRecentPostedComments(sessionId) {
-  return stmts.getRecentPostedComments.all(sessionId).map(r => r.generated_comment);
-}
-
 function getCommentsPaginated(limit, offset) {
   return stmts.getCommentsPaginated.all(limit, offset);
 }
@@ -500,6 +516,26 @@ function isSkipDay(date) {
   return !!stmts.isSkipDay.get(date);
 }
 
+/**
+ * Force-end all sessions stuck in 'running' state.
+ * Call on server startup and when stopping sessions externally.
+ */
+function forceEndRunningSessions() {
+  const result = stmts.forceEndRunningSessions.run();
+  if (result.changes > 0) {
+    log.info(`Cleaned up ${result.changes} stale running session(s)`);
+  }
+  return result.changes;
+}
+
+/**
+ * Force-end a specific session by ID.
+ */
+function forceEndSession(sessionId, reason = 'Process terminated') {
+  if (!sessionId) return;
+  stmts.forceEndSession.run(reason, sessionId);
+}
+
 module.exports = {
   startSession,
   endSession,
@@ -512,7 +548,6 @@ module.exports = {
   pruneOldData,
   getTodayStr,
   // API queries
-  getLastError,
   getStatsByDays,
   getMatchLevelsByDays,
   getReactionsPaginated,
@@ -524,7 +559,6 @@ module.exports = {
   isAlreadyCommented,
   ensureCommentDailyTarget,
   getCommentDailyProgress,
-  getRecentPostedComments,
   getCommentsPaginated,
   getCommentsCount,
   getCommentStatsByDays,
@@ -533,4 +567,12 @@ module.exports = {
   isCooldownActive,
   markSkipDay,
   isSkipDay,
+  // Cleanup
+  forceEndRunningSessions,
+  forceEndSession,
+  // Account maturity
+  getFirstSessionDate() {
+    const row = stmts.getFirstSessionDate.get();
+    return row ? row.first_date : null;
+  },
 };

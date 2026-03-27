@@ -8,6 +8,27 @@ const log = require('../utils/logger');
 
 const router = express.Router();
 
+// ── Startup cleanup: mark any stale 'running' sessions as stopped ────
+// This handles the case where the server crashed or restarted while
+// a session was running. Without this, the dashboard would show
+// "Running" forever for the orphaned session.
+db.forceEndRunningSessions();
+
+// Also clean up any orphaned lockfile from a dead session process
+try {
+  if (fs.existsSync(config.lockfilePath)) {
+    const lockPid = parseInt(fs.readFileSync(config.lockfilePath, 'utf-8').trim(), 10);
+    let alive = false;
+    if (lockPid && !isNaN(lockPid)) {
+      try { process.kill(lockPid, 0); alive = true; } catch { alive = false; }
+    }
+    if (!alive) {
+      fs.unlinkSync(config.lockfilePath);
+      log.info('Cleaned up orphaned lockfile from dead session process');
+    }
+  }
+} catch {}
+
 // ── SSE (Server-Sent Events) for live session progress ──────────────
 
 const sseClients = new Set();
@@ -23,13 +44,22 @@ router.get('/events', (req, res) => {
   });
   res.write('data: {"type":"connected"}\n\n');
   sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+
+  // Clean up on client disconnect or error to prevent memory leaks
+  const cleanup = () => sseClients.delete(res);
+  req.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 function broadcast(event) {
   const data = `data: ${JSON.stringify(event)}\n\n`;
   for (const client of sseClients) {
-    client.write(data);
+    try {
+      client.write(data);
+    } catch {
+      // Client disconnected — remove on next cleanup cycle
+      sseClients.delete(client);
+    }
   }
 }
 
@@ -50,12 +80,16 @@ const ALLOWED_SETTINGS = [
   'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES',
   'TIMEZONE', 'LOCALE', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
   'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES',
-  'USER_NAME', 'TEAM', 'ADMIN_API_URL', 'ADMIN_API_KEY',
+  'USER_NAME', 'TEAM', 'ADMIN_API_URL',
   // Comment settings (OPENAI_API_KEY intentionally excluded — security)
   'ENABLE_COMMENTS', 'COMMENT_DRY_RUN', 'OPENAI_MODEL',
   'DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX',
   'COMMENT_MIN_GAP', 'COMMENT_MAX_GAP',
 ];
+
+// ── Constants ────────────────────────────────────────────────────────
+
+const LOCK_STALE_TTL = 30 * 60 * 1000; // 30 minutes — lock older than this is considered stale
 
 // ── Cached checks for /status hot path ──────────────────────────────
 
@@ -110,6 +144,7 @@ router.get('/status', (req, res) => {
         target: commentDaily.target || 0,
         achieved: commentDaily.achieved || 0,
       },
+      account: config.account || 'default',
       commentsEnabled: config.enableComments,
       hasOpenAIKey: !!config.openaiApiKey,
       sessionsToday: sessions.length,
@@ -274,6 +309,11 @@ router.post('/persona', (req, res) => {
       maxLength: Math.min(1000, parseInt(data.maxLength) || 300),
     };
 
+    // Ensure minLength < maxLength
+    if (clean.minLength >= clean.maxLength) {
+      return res.status(400).json({ error: 'minLength must be less than maxLength' });
+    }
+
     fs.writeFileSync(COMMENTING_PATH, JSON.stringify(clean, null, 2));
     log.info('Commenting config updated via dashboard');
     res.json({ success: true });
@@ -315,15 +355,26 @@ router.post('/settings', (req, res) => {
         settings[key] = req.body[key];
       }
     }
-    // OPENAI_API_KEY is write-only (not in ALLOWED_SETTINGS for GET, but accepted in POST)
+    // Write-only keys: accepted in POST but never returned by GET
     if (req.body.OPENAI_API_KEY) {
       settings.OPENAI_API_KEY = req.body.OPENAI_API_KEY;
     }
+    if (req.body.ADMIN_API_KEY) {
+      settings.ADMIN_API_KEY = req.body.ADMIN_API_KEY;
+    }
 
-    // Validate time windows
+    // Validate time windows: format + start < end
     for (const key of ['MORNING_WINDOW', 'AFTERNOON_WINDOW', 'EVENING_WINDOW']) {
-      if (settings[key] && !TIME_WINDOW_RE.test(sanitizeValue(settings[key]))) {
+      if (!settings[key]) continue;
+      const val = sanitizeValue(settings[key]);
+      if (!TIME_WINDOW_RE.test(val)) {
         return res.status(400).json({ error: `${key} must be in HH:MM-HH:MM format` });
+      }
+      const [start, end] = val.split('-');
+      const [sh, sm] = start.split(':').map(Number);
+      const [eh, em] = end.split(':').map(Number);
+      if (sh * 60 + sm >= eh * 60 + em) {
+        return res.status(400).json({ error: `${key} start time must be before end time` });
       }
     }
 
@@ -338,9 +389,43 @@ router.post('/settings', (req, res) => {
     }
 
     // Validate numeric fields
-    for (const key of ['DAILY_TARGET_MIN', 'DAILY_TARGET_MAX', 'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT', 'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES']) {
+    for (const key of ['DAILY_TARGET_MIN', 'DAILY_TARGET_MAX', 'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT', 'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES', 'DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX', 'COMMENT_MIN_GAP', 'COMMENT_MAX_GAP']) {
       if (settings[key] && !NUMERIC_RE.test(sanitizeValue(settings[key]))) {
         return res.status(400).json({ error: `${key} must be a number` });
+      }
+    }
+
+    // Validate viewport dimensions (reasonable browser window sizes)
+    const vw = parseInt(sanitizeValue(settings.VIEWPORT_WIDTH || '0'));
+    const vh = parseInt(sanitizeValue(settings.VIEWPORT_HEIGHT || '0'));
+    if (settings.VIEWPORT_WIDTH && (vw < 800 || vw > 3840)) {
+      return res.status(400).json({ error: 'VIEWPORT_WIDTH must be between 800 and 3840' });
+    }
+    if (settings.VIEWPORT_HEIGHT && (vh < 600 || vh > 2160)) {
+      return res.status(400).json({ error: 'VIEWPORT_HEIGHT must be between 600 and 2160' });
+    }
+
+    // Validate percentage fields (0-100)
+    for (const key of ['SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT']) {
+      if (settings[key]) {
+        const val = parseInt(sanitizeValue(settings[key]));
+        if (val < 0 || val > 100) {
+          return res.status(400).json({ error: `${key} must be between 0 and 100` });
+        }
+      }
+    }
+
+    // Validate min <= max pairs
+    const pairs = [
+      ['DAILY_TARGET_MIN', 'DAILY_TARGET_MAX', 'Daily target'],
+      ['DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX', 'Daily comment target'],
+      ['COMMENT_MIN_GAP', 'COMMENT_MAX_GAP', 'Comment gap'],
+    ];
+    for (const [minKey, maxKey, label] of pairs) {
+      const minVal = parseInt(sanitizeValue(settings[minKey] || '0'));
+      const maxVal = parseInt(sanitizeValue(settings[maxKey] || '0'));
+      if (settings[minKey] && settings[maxKey] && minVal > maxVal) {
+        return res.status(400).json({ error: `${label} min cannot be greater than max` });
       }
     }
 
@@ -365,8 +450,8 @@ router.post('/settings', (req, res) => {
       `EVENING_WINDOW=${s('EVENING_WINDOW', '17:00-19:00')}`,
       '',
       '# Daily reaction target range (keep low to avoid detection)',
-      `DAILY_TARGET_MIN=${s('DAILY_TARGET_MIN', '15')}`,
-      `DAILY_TARGET_MAX=${s('DAILY_TARGET_MAX', '25')}`,
+      `DAILY_TARGET_MIN=${s('DAILY_TARGET_MIN', '0')}`,
+      `DAILY_TARGET_MAX=${s('DAILY_TARGET_MAX', '45')}`,
       '',
       '# Max jitter delay in minutes before starting a session',
       `MAX_JITTER_MINUTES=${s('MAX_JITTER_MINUTES', '30')}`,
@@ -385,10 +470,10 @@ router.post('/settings', (req, res) => {
       `VIEWPORT_HEIGHT=${s('VIEWPORT_HEIGHT', '768')}`,
       '',
       '# Anti-detection: skip day probability (0-100)',
-      `SKIP_DAY_PERCENT=${s('SKIP_DAY_PERCENT', '20')}`,
+      `SKIP_DAY_PERCENT=${s('SKIP_DAY_PERCENT', '15')}`,
       '',
       '# Anti-detection: browse-only session probability (0-100)',
-      `BROWSE_ONLY_PERCENT=${s('BROWSE_ONLY_PERCENT', '20')}`,
+      `BROWSE_ONLY_PERCENT=${s('BROWSE_ONLY_PERCENT', '15')}`,
       '',
       '# Anti-detection: window time variance in minutes',
       `WINDOW_VARIANCE_MINUTES=${s('WINDOW_VARIANCE_MINUTES', '45')}`,
@@ -404,14 +489,24 @@ router.post('/settings', (req, res) => {
       `COMMENT_DRY_RUN=${s('COMMENT_DRY_RUN', 'false')}`,
       `OPENAI_API_KEY=${s('OPENAI_API_KEY', '')}`,
       `OPENAI_MODEL=${s('OPENAI_MODEL', 'gpt-4o-mini')}`,
-      `DAILY_COMMENT_MIN=${s('DAILY_COMMENT_MIN', '5')}`,
-      `DAILY_COMMENT_MAX=${s('DAILY_COMMENT_MAX', '10')}`,
+      `DAILY_COMMENT_MIN=${s('DAILY_COMMENT_MIN', '3')}`,
+      `DAILY_COMMENT_MAX=${s('DAILY_COMMENT_MAX', '8')}`,
       `COMMENT_MIN_GAP=${s('COMMENT_MIN_GAP', '3')}`,
       `COMMENT_MAX_GAP=${s('COMMENT_MAX_GAP', '8')}`,
       '',
     ];
 
     fs.writeFileSync(ENV_PATH, lines.join('\n'));
+
+    // Hot-reload: update in-memory config so dashboard reflects changes immediately
+    // (child session processes always read .env fresh on spawn, but the dashboard
+    // server itself needs this to show accurate status like commentsEnabled)
+    try {
+      config.reload();
+    } catch (reloadErr) {
+      log.warn(`Config reload failed (dashboard may show stale values): ${reloadErr.message}`);
+    }
+
     log.info('Settings updated via dashboard');
     res.json({ success: true });
   } catch (err) {
@@ -428,11 +523,31 @@ router.post('/session/start', (req, res) => {
     return res.status(409).json({ error: 'A session is already running' });
   }
 
+  // Check for lockfile from a terminal-started session
+  if (fs.existsSync(config.lockfilePath)) {
+    try {
+      const lockAge = Date.now() - fs.statSync(config.lockfilePath).mtimeMs;
+      // Read PID from lockfile and check if the process is actually alive
+      const lockPid = parseInt(fs.readFileSync(config.lockfilePath, 'utf-8').trim(), 10);
+      let processAlive = false;
+      if (lockPid && !isNaN(lockPid)) {
+        try { process.kill(lockPid, 0); processAlive = true; } catch { processAlive = false; }
+      }
+
+      if (processAlive && lockAge < LOCK_STALE_TTL) {
+        return res.status(409).json({ error: 'Another session is running (started from terminal). Stop it first.' });
+      }
+      // Process is dead or lock is stale — clean up and proceed
+      fs.unlinkSync(config.lockfilePath);
+      db.forceEndRunningSessions();
+    } catch {}
+  }
+
   const indexPath = path.join(__dirname, '..', 'index.js');
 
   activeSessionProcess = spawn('node', [indexPath], {
     cwd: path.join(__dirname, '..', '..'),
-    env: { ...process.env, FORCE_NO_JITTER: '1' },
+    env: { ...process.env, FORCE_NO_JITTER: '1', FORCE_NO_SKIP: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -453,8 +568,21 @@ router.post('/session/start', (req, res) => {
   forwardOutput(activeSessionProcess.stdout);
   forwardOutput(activeSessionProcess.stderr);
 
+  activeSessionProcess.on('error', (err) => {
+    log.error(`Session process spawn error: ${err.message}`);
+    // Clean up lockfile so next Start doesn't get blocked
+    try { if (fs.existsSync(config.lockfilePath)) fs.unlinkSync(config.lockfilePath); } catch {}
+    db.forceEndRunningSessions();
+    broadcast({ type: 'session_ended', code: 'error' });
+    activeSessionProcess = null;
+  });
+
   activeSessionProcess.on('close', (code) => {
     log.info(`Session process exited with code ${code}`);
+    // Clean up lockfile in case the child didn't (crash, SIGKILL, etc.)
+    try { if (fs.existsSync(config.lockfilePath)) fs.unlinkSync(config.lockfilePath); } catch {}
+    // Clean up any 'running' sessions in DB that the child process didn't finalize
+    db.forceEndRunningSessions();
     broadcast({ type: 'session_ended', code });
     activeSessionProcess = null;
   });
@@ -464,21 +592,46 @@ router.post('/session/start', (req, res) => {
 });
 
 router.post('/session/stop', (req, res) => {
-  if (!activeSessionProcess) {
+  let killed = false;
+
+  // Case 1: Session spawned by this dashboard process
+  if (activeSessionProcess) {
+    try {
+      activeSessionProcess.kill();
+    } catch (e) {
+      log.warn(`Failed to kill session process: ${e.message}`);
+    }
+    killed = true;
+  }
+
+  // Case 2: Session started from terminal (npm start) — read PID from lockfile
+  if (!killed && fs.existsSync(config.lockfilePath)) {
+    try {
+      const pid = parseInt(fs.readFileSync(config.lockfilePath, 'utf-8').trim(), 10);
+      if (pid && !isNaN(pid)) {
+        process.kill(pid); // cross-platform: SIGTERM on Mac/Linux, TerminateProcess on Windows
+        log.info(`Killed external session process (PID ${pid})`);
+        killed = true;
+      }
+    } catch (e) {
+      // Process already dead or invalid PID — that's fine
+      log.warn(`Could not kill external process: ${e.message}`);
+    }
+  }
+
+  // Always clean up lockfile
+  try {
     if (fs.existsSync(config.lockfilePath)) {
       fs.unlinkSync(config.lockfilePath);
     }
-    return res.json({ success: true, message: 'No session running' });
-  }
+  } catch {}
 
-  activeSessionProcess.kill('SIGTERM');
-  // Let the 'close' handler set activeSessionProcess = null (not here — avoids race)
+  // Always clean up DB: mark any 'running' sessions as 'stopped'
+  // This is critical because killed processes can't update the DB themselves
+  db.forceEndRunningSessions();
 
-  if (fs.existsSync(config.lockfilePath)) {
-    fs.unlinkSync(config.lockfilePath);
-  }
-
-  res.json({ success: true, message: 'Session stopping' });
+  broadcast({ type: 'session_ended', code: killed ? 'stopped' : null });
+  res.json({ success: true, message: killed ? 'Session stopped' : 'No active session found' });
 });
 
 // ── Login ───────────────────────────────────────────────────────────
@@ -495,6 +648,11 @@ router.post('/login/start', (req, res) => {
   loginProcess = spawn('node', [loginPath], {
     cwd: path.join(__dirname, '..', '..'),
     stdio: 'pipe',
+  });
+
+  loginProcess.on('error', (err) => {
+    log.error(`Login process spawn error: ${err.message}`);
+    loginProcess = null;
   });
 
   loginProcess.on('close', () => {

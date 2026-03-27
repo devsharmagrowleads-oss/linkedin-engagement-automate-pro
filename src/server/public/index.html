@@ -391,6 +391,20 @@
         <div class="page-body">
           <div class="grid-2" style="margin-bottom: 20px;">
             <div>
+              <div class="section-header">Identity</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Your Name</label>
+                  <input type="text" class="form-input" id="set-USER_NAME" placeholder="YourName">
+                </div>
+                <div class="form-row">
+                  <label>Team</label>
+                  <input type="text" class="form-input" id="set-TEAM" placeholder="default">
+                </div>
+              </div>
+              <div class="section-footer">Used for admin dashboard tracking. Set a unique name per team member.</div>
+            </div>
+            <div>
               <div class="section-header">Session Windows</div>
               <div class="card">
                 <div class="form-row">
@@ -408,17 +422,19 @@
               </div>
               <div class="section-footer">24h format. Sessions auto-trigger during these windows.</div>
             </div>
+          </div>
 
+          <div class="grid-2" style="margin-bottom: 20px;">
             <div>
               <div class="section-header">Targets & Timing</div>
               <div class="card">
                 <div class="form-row">
                   <label>Min Daily Reactions</label>
-                  <input type="number" class="form-input" id="set-DAILY_TARGET_MIN" placeholder="45">
+                  <input type="number" class="form-input" id="set-DAILY_TARGET_MIN" placeholder="15">
                 </div>
                 <div class="form-row">
                   <label>Max Daily Reactions</label>
-                  <input type="number" class="form-input" id="set-DAILY_TARGET_MAX" placeholder="55">
+                  <input type="number" class="form-input" id="set-DAILY_TARGET_MAX" placeholder="25">
                 </div>
                 <div class="form-row">
                   <label>Max Jitter (min)</label>
@@ -428,11 +444,63 @@
                   <label>Session Duration (min)</label>
                   <input type="number" class="form-input" id="set-MAX_SESSION_MINUTES" placeholder="25">
                 </div>
+              </div>
+            </div>
+            <div>
+              <div class="section-header">Browser & Locale</div>
+              <div class="card">
                 <div class="form-row">
                   <label>Timezone</label>
                   <input type="text" class="form-input" id="set-TIMEZONE" placeholder="Asia/Kolkata">
                 </div>
+                <div class="form-row">
+                  <label>Locale</label>
+                  <input type="text" class="form-input" id="set-LOCALE" placeholder="en-IN">
+                </div>
+                <div class="form-row">
+                  <label>Viewport Width</label>
+                  <input type="number" class="form-input" id="set-VIEWPORT_WIDTH" placeholder="1366">
+                </div>
+                <div class="form-row">
+                  <label>Viewport Height</label>
+                  <input type="number" class="form-input" id="set-VIEWPORT_HEIGHT" placeholder="768">
+                </div>
               </div>
+            </div>
+          </div>
+
+          <div class="grid-2" style="margin-bottom: 20px;">
+            <div>
+              <div class="section-header">Anti-Detection</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Skip Day %</label>
+                  <input type="number" class="form-input" id="set-SKIP_DAY_PERCENT" placeholder="20" min="0" max="100">
+                </div>
+                <div class="form-row">
+                  <label>Browse-Only %</label>
+                  <input type="number" class="form-input" id="set-BROWSE_ONLY_PERCENT" placeholder="20" min="0" max="100">
+                </div>
+                <div class="form-row">
+                  <label>Window Variance (min)</label>
+                  <input type="number" class="form-input" id="set-WINDOW_VARIANCE_MINUTES" placeholder="45">
+                </div>
+              </div>
+              <div class="section-footer">Higher values = more random, lower detection risk.</div>
+            </div>
+            <div>
+              <div class="section-header">Admin Reporting</div>
+              <div class="card">
+                <div class="form-row">
+                  <label>Admin API URL</label>
+                  <input type="text" class="form-input" id="set-ADMIN_API_URL" placeholder="https://admin.example.com">
+                </div>
+                <div class="form-row">
+                  <label>Admin API Key</label>
+                  <input type="password" class="form-input" id="set-ADMIN_API_KEY" placeholder="your-api-key">
+                </div>
+              </div>
+              <div class="section-footer">Optional. Leave empty to disable reporting.</div>
             </div>
           </div>
 
@@ -529,6 +597,11 @@
     </main>
   </div>
 
-  <script src="/js/app.js"></script>
+  <script>
+    // Load app.js with timestamp to bust any cache
+    var s = document.createElement('script');
+    s.src = '/js/app.js?t=' + Date.now();
+    document.body.appendChild(s);
+  </script>
 </body>
 </html>

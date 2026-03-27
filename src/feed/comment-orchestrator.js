@@ -24,7 +24,7 @@ const log = require('../utils/logger');
  * @returns {{ commented: boolean, apiError: boolean }}
  */
 async function tryCommentOnPost(page, post, opts) {
-  const { sessionId, commentConfig, recentSessionComments, openaiModel, openaiApiKey, dryRun, matchLevel, matchKeyword } = opts;
+  const { sessionId, commentConfig, recentSessionComments, openaiModel, openaiApiKey, dryRun, matchLevel, matchKeyword, personality } = opts;
 
   try {
     // Locate post element for comment scraping
@@ -54,14 +54,12 @@ async function tryCommentOnPost(page, post, opts) {
     }
 
     // Post the comment (or dry run)
-    const posted = await commentOnPost(page, post, result.comment, dryRun);
+    const posted = await commentOnPost(page, post, result.comment, dryRun, personality);
     const status = posted.success ? (dryRun ? 'dry_run' : 'posted') : 'failed';
     db.logComment(sessionId, post, result.comment, status, posted.error || null, matchLevel, matchKeyword, result.model);
 
     if (posted.success) {
-      recentSessionComments.push(result.comment);
-      if (recentSessionComments.length > 5) recentSessionComments.shift();
-      return { commented: true, apiError: false };
+      return { commented: true, apiError: false, commentText: result.comment };
     }
 
     return { commented: false, apiError: false };

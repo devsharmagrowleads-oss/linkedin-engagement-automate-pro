@@ -18,9 +18,6 @@ const SELECTORS = {
   likeButton: 'button[aria-label*="Reaction button"]',
   likeButtonAria: 'button[aria-label*="React"]',
 
-  // Reaction picker (appears on hover)
-  reactionPicker: 'div[role="tooltip"], div[role="listbox"]',
-
   // Specific reactions (aria-labels used by LinkedIn)
   reactions: {
     like: 'React Like',
@@ -34,20 +31,10 @@ const SELECTORS = {
   // Already reacted indicator (button aria-label contains a reaction name)
   alreadyReacted: 'button[aria-label*="Reaction button state: reacted"]',
 
-  // Promoted/sponsored indicators
-  promotedIndicators: [
-    'a[href*="lnkd.in"]',
-    '[aria-label*="Promoted"]',
-    '[aria-label*="Sponsored"]',
-  ],
-  promotedText: 'Promoted',
-
   // Comment-related selectors
+  // LinkedIn removed aria-label from comment button — now it's a <button> with inner text "Comment"
   commentButton: 'button[aria-label*="Comment"], button[aria-label*="comment"]',
-  commentInput: 'div[role="textbox"][aria-label*="comment" i], div[role="textbox"][contenteditable="true"], div.ql-editor[contenteditable="true"]',
-  commentSubmit: 'button[aria-label*="Post" i].comments-comment-box__submit-button, button.comments-comment-box__submit-button, button[type="submit"][aria-label*="Post" i]',
-  commentContainer: 'div.comments-comments-list, div[data-test-id="comments-list"], article.comments-comment-item',
-  commentItem: 'article.comments-comment-item, div[data-test-id="comment"]',
+  commentButtonText: 'Comment', // fallback: find button by text content
 
 };
 

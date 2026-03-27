@@ -6,10 +6,25 @@ browser-profile/
 # SQLite database, error screenshots, lockfiles
 data/
 
-# Environment config (contains no secrets currently, but may in future)
+# Environment config (contains API keys and personal settings)
 .env
+
+# Account credentials
+accounts.json
 
 # Debug/diagnostic scratch files
 src/debug*.js
 src/diagnose*.js
 src/verify*.js
+test-*.js
+
+# Build artifacts and distribution archives
+*.zip
+*.tar.gz
+
+# Team-specific docs (each member creates their own)
+TEAM-*.md
+
+# OS files
+.DS_Store
+Thumbs.db

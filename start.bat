@@ -1,16 +1,13 @@
 @echo off
-title LinkedIn Auto-React Dashboard
+title Growleads Dashboard
 echo.
-echo  Starting LinkedIn Auto-React Dashboard...
-echo  The dashboard will open in your browser automatically.
-echo.
+echo  Starting Growleads Dashboard...
 echo  Close this window to stop the dashboard.
 echo.
 
 cd /d "%~dp0"
 
-REM Wait a moment then open browser
-start "" cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:3000"
-
-REM Start the dashboard server
-node src/server/server.js
+REM Use Node to find the right port and start the server
+node -e "const p=process.env.PORT||require('./src/config').port||3000;console.log('PORT='+p)" 2>nul
+node scripts/start-dashboard.js
+pause

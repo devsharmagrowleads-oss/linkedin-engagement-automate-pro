@@ -50,13 +50,11 @@ Works on **Windows**, **macOS**, and **Linux**.
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-npm install
-npx playwright install chromium
+# 1. One-command setup (installs dependencies, Playwright browser, creates .env)
+npm run setup
 
-# 2. Configure
-cp .env.example .env
-# Edit .env with your timezone and preferences
+# 2. Edit .env with your USER_NAME, TEAM, and TIMEZONE
+# (or configure via the dashboard Settings page)
 
 # 3. Login to LinkedIn (one-time)
 npm run login
@@ -65,8 +63,7 @@ npm run login
 npm run dashboard
 # Open http://localhost:3000
 
-# 5. Run a session manually (or use the dashboard button)
-npm start
+# 5. Use the dashboard to start/stop sessions and configure settings
 ```
 
 ---

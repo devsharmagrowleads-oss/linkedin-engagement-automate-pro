@@ -1,18 +1,39 @@
 const { humanDelay, humanScroll, humanClick, sleep } = require('./human');
 const log = require('../utils/logger');
 
+// Weighted destinations — more variety than just 3 pages
+const DESTINATIONS = [
+  { name: 'notifications', url: 'https://www.linkedin.com/notifications/',  weight: 0.25, dwellRange: [3000, 8000]  },
+  { name: 'messaging',     url: 'https://www.linkedin.com/messaging/',      weight: 0.20, dwellRange: [5000, 20000] },
+  { name: 'my network',    url: 'https://www.linkedin.com/mynetwork/',      weight: 0.20, dwellRange: [3000, 10000] },
+  { name: 'jobs',          url: 'https://www.linkedin.com/jobs/',           weight: 0.12, dwellRange: [5000, 15000] },
+  { name: 'groups',        url: 'https://www.linkedin.com/groups/',         weight: 0.08, dwellRange: [4000, 12000] },
+  { name: 'events',        url: 'https://www.linkedin.com/events/',         weight: 0.08, dwellRange: [3000, 10000] },
+  { name: 'learning',      url: 'https://www.linkedin.com/learning/',       weight: 0.07, dwellRange: [5000, 18000] },
+];
+
+function weightedPickDest() {
+  const total = DESTINATIONS.reduce((s, d) => s + d.weight, 0);
+  let r = Math.random() * total;
+  for (const d of DESTINATIONS) {
+    r -= d.weight;
+    if (r <= 0) return d;
+  }
+  return DESTINATIONS[0];
+}
+
 /**
  * Visit a LinkedIn profile page to diversify navigation.
- * Scrolls a bit, pauses like reading, then navigates back to feed.
  */
-async function visitProfile(page, authorName) {
+async function visitProfile(page, authorName, personality) {
+  const p = personality || {};
+  const tempoFactor = p.tempo === 'fast' ? 0.6 : p.tempo === 'contemplative' ? 1.8 : 1.0;
+
   try {
-    // Find a link to the author's profile within the current view
     const profileLink = page.locator(`a[href*="/in/"]`).first();
     const isVisible = await profileLink.isVisible().catch(() => false);
 
     if (!isVisible) {
-      // Fallback: click on a visible profile link in any post
       const anyProfile = page.locator('div[role="listitem"] a[href*="/in/"]').first();
       const anyVisible = await anyProfile.isVisible().catch(() => false);
       if (!anyVisible) return;
@@ -23,24 +44,27 @@ async function visitProfile(page, authorName) {
 
     await sleep(humanDelay(2000, 4000));
 
-    // Simulate reading the profile
-    await humanScroll(page);
-    await sleep(humanDelay(3000, 8000));
+    // Personality-driven profile reading depth
+    await humanScroll(page, personality);
+    await sleep(humanDelay(
+      Math.round(3000 * tempoFactor),
+      Math.round(10000 * tempoFactor)
+    ));
 
-    // Occasionally scroll a bit more
-    if (Math.random() < 0.4) {
-      await humanScroll(page);
-      await sleep(humanDelay(2000, 5000));
+    // Contemplative sessions dig deeper
+    if (p.tempo === 'contemplative' || p.tempo === 'slow') {
+      if (Math.random() < 0.35) {
+        await humanScroll(page, personality);
+        await sleep(humanDelay(2000, 6000));
+      }
     }
 
     log.info(`  [nav] Visited a profile page`);
 
-    // Go back to feed
     await page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     await sleep(humanDelay(1500, 3000));
   } catch (err) {
     log.warn(`Profile visit failed: ${err.message}`);
-    // Try to get back to feed
     await page.goto('https://www.linkedin.com/feed/', {
       waitUntil: 'domcontentloaded', timeout: 15000
     }).catch(() => {});
@@ -49,7 +73,7 @@ async function visitProfile(page, authorName) {
 }
 
 /**
- * Click "see more" / "...more" on a long post to simulate reading the full content.
+ * Click "see more" on a post to simulate reading full content.
  */
 async function expandPost(page, postLocator) {
   try {
@@ -58,7 +82,7 @@ async function expandPost(page, postLocator) {
     if (!isVisible) return false;
 
     await humanClick(page, seeMore);
-    await sleep(humanDelay(2000, 6000)); // Read the expanded content
+    await sleep(humanDelay(2000, 8000));
     log.info(`  [nav] Expanded a post to read more`);
     return true;
   } catch {
@@ -67,31 +91,26 @@ async function expandPost(page, postLocator) {
 }
 
 /**
- * Visit a random LinkedIn page to diversify navigation pattern.
- * Picks from: notifications, messaging, my network, or a company page.
+ * Visit a random LinkedIn page. Uses weighted selection from 7+ destinations.
  */
-async function randomNavigation(page) {
-  const destinations = [
-    { name: 'notifications', url: 'https://www.linkedin.com/notifications/' },
-    { name: 'messaging', url: 'https://www.linkedin.com/messaging/' },
-    { name: 'my network', url: 'https://www.linkedin.com/mynetwork/' },
-  ];
-
-  const dest = destinations[Math.floor(Math.random() * destinations.length)];
+async function randomNavigation(page, personality) {
+  const dest = weightedPickDest();
 
   try {
     log.info(`  [nav] Visiting ${dest.name}...`);
     await page.goto(dest.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await sleep(humanDelay(3000, 8000));
+
+    // Destination-specific dwell time
+    await sleep(humanDelay(dest.dwellRange[0], dest.dwellRange[1]));
 
     // Scroll around a bit
-    await humanScroll(page);
+    await humanScroll(page, personality);
     await sleep(humanDelay(2000, 5000));
 
-    // Occasionally interact more
-    if (Math.random() < 0.3) {
-      await humanScroll(page);
-      await sleep(humanDelay(2000, 4000));
+    // Sometimes interact more (personality-driven)
+    if (Math.random() < (personality?.navDiversionChance || 0.2)) {
+      await humanScroll(page, personality);
+      await sleep(humanDelay(2000, 5000));
     }
 
     // Navigate back to feed
@@ -111,37 +130,32 @@ async function randomNavigation(page) {
 }
 
 /**
- * Run a browse-only session: scroll the feed, read posts, but react to nothing.
- * Makes the account look like a normal user who sometimes just browses.
+ * Run a browse-only session with personality-driven behavior.
  */
-async function browseOnlySession(page, maxMinutes) {
+async function browseOnlySession(page, maxMinutes, personality) {
   log.info('Browse-only session — scrolling and reading without reacting');
   const startTime = Date.now();
   const maxMs = maxMinutes * 60 * 1000;
 
-  // Maybe check notifications first
   if (Math.random() < 0.5) {
-    await randomNavigation(page);
+    await randomNavigation(page, personality);
   }
 
   while (Date.now() - startTime < maxMs) {
-    await humanScroll(page);
-    await sleep(humanDelay(2000, 6000));
+    await humanScroll(page, personality);
+    await sleep(humanDelay(2000, 7000));
 
-    // Occasionally do a longer reading pause
-    if (Math.random() < 0.25) {
-      await sleep(humanDelay(5000, 15000));
+    if (Math.random() < (personality?.longReadChance || 0.10)) {
+      await sleep(humanDelay(8000, 25000));
     }
 
-    // Occasionally expand a post
-    if (Math.random() < 0.15) {
+    if (Math.random() < (personality?.expandPostChance || 0.10)) {
       const post = page.locator('div[role="listitem"]').first();
       await expandPost(page, post);
     }
 
-    // Occasionally visit a profile
-    if (Math.random() < 0.08) {
-      await visitProfile(page);
+    if (Math.random() < (personality?.profileVisitChance || 0.05)) {
+      await visitProfile(page, null, personality);
     }
   }
 

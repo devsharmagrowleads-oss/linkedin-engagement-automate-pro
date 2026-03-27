@@ -219,11 +219,44 @@ function renderRecentActivity(reactions) {
 // ── Session Controls ────────────────────────────────────────────────
 
 async function startSession() {
+  const btn = document.getElementById('btnStart');
+  const origText = btn.textContent;
+
+  // Immediate visual feedback
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+  document.getElementById('liveSessionCard').style.display = '';
+  document.getElementById('liveSessionLog').textContent = 'Please wait — launching browser, this takes 30-60 seconds...\n';
+
   try {
     const result = await api('POST', '/session/start');
     toast(result.message || 'Session started');
     refreshDashboard();
-  } catch { toast('Failed to start session', 'error'); }
+  } catch (e) {
+    const msg = e.message || '';
+    // Auto-recover: if blocked by stale session/lock, force-stop then retry once
+    if (msg.includes('already running') || msg.includes('Another session')) {
+      document.getElementById('liveSessionLog').textContent += 'Clearing stale session...\n';
+      try {
+        await api('POST', '/session/stop');
+        await new Promise(r => setTimeout(r, 1000));
+        const retry = await api('POST', '/session/start');
+        toast(retry.message || 'Session started');
+        refreshDashboard();
+        return;
+      } catch (e2) {
+        toast(e2.message || 'Failed to start session', 'error');
+        btn.disabled = false;
+        btn.textContent = origText;
+        document.getElementById('liveSessionCard').style.display = 'none';
+      }
+    } else {
+      toast(msg || 'Failed to start session', 'error');
+      btn.disabled = false;
+      btn.textContent = origText;
+      document.getElementById('liveSessionCard').style.display = 'none';
+    }
+  }
 }
 
 async function stopSession() {
@@ -231,7 +264,7 @@ async function stopSession() {
     const result = await api('POST', '/session/stop');
     toast(result.message || 'Session stopped');
     refreshDashboard();
-  } catch { toast('Failed to stop session', 'error'); }
+  } catch (e) { toast(e.message || 'Failed to stop session', 'error'); }
 }
 
 async function openLogin() {
@@ -366,7 +399,7 @@ async function saveKeywords() {
   try {
     await api('POST', '/keywords', keywordsData);
     toast('Keywords saved');
-  } catch { toast('Failed to save keywords', 'error'); }
+  } catch (e) { toast(e.message || 'Failed to save keywords', 'error'); }
 }
 
 // ── Settings Page ───────────────────────────────────────────────────
@@ -388,10 +421,13 @@ async function loadSettings() {
 
 async function saveSettings() {
   const fields = [
+    'USER_NAME', 'TEAM',
     'MORNING_WINDOW', 'AFTERNOON_WINDOW', 'EVENING_WINDOW',
     'DAILY_TARGET_MIN', 'DAILY_TARGET_MAX',
-    'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES', 'TIMEZONE',
-    'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
+    'MAX_JITTER_MINUTES', 'MAX_SESSION_MINUTES',
+    'TIMEZONE', 'LOCALE', 'VIEWPORT_WIDTH', 'VIEWPORT_HEIGHT',
+    'SKIP_DAY_PERCENT', 'BROWSE_ONLY_PERCENT', 'WINDOW_VARIANCE_MINUTES',
+    'ADMIN_API_URL',
     'ENABLE_COMMENTS', 'COMMENT_DRY_RUN', 'OPENAI_MODEL',
     'DAILY_COMMENT_MIN', 'DAILY_COMMENT_MAX',
     'COMMENT_MIN_GAP', 'COMMENT_MAX_GAP',
@@ -401,15 +437,20 @@ async function saveSettings() {
     const el = document.getElementById(`set-${key}`);
     if (el && el.value) settings[key] = el.value;
   }
-  // Only include API key if user typed a new one
+  // Only include API keys if user typed a new value
   const apiKeyEl = document.getElementById('set-OPENAI_API_KEY');
   if (apiKeyEl && apiKeyEl.value && !apiKeyEl.value.startsWith('sk-...')) {
     settings['OPENAI_API_KEY'] = apiKeyEl.value;
   }
+  const adminKeyEl = document.getElementById('set-ADMIN_API_KEY');
+  if (adminKeyEl && adminKeyEl.value) {
+    settings['ADMIN_API_KEY'] = adminKeyEl.value;
+  }
   try {
     await api('POST', '/settings', settings);
-    toast('Settings saved');
-  } catch { toast('Failed to save settings', 'error'); }
+    toast('Settings saved. Changes apply to the next session.');
+    refreshDashboard(); // Refresh status to show updated config
+  } catch (e) { toast(e.message || 'Failed to save settings', 'error'); }
 }
 
 // ── Comments Page ───────────────────────────────────────────────────
@@ -511,7 +552,7 @@ async function savePersona() {
   try {
     await api('POST', '/persona', data);
     toast('Persona saved');
-  } catch { toast('Failed to save persona', 'error'); }
+  } catch (e) { toast(e.message || 'Failed to save persona', 'error'); }
 }
 
 // ── Sessions Page ───────────────────────────────────────────────────
@@ -571,30 +612,53 @@ function openLinkedInPost(url) {
 
 // ── SSE Live Log ────────────────────────────────────────────────────
 
+let sseRetryDelay = 1000;
+const SSE_MAX_RETRY = 30000;
+
 function connectSSE() {
   const es = new EventSource('/api/events');
+  es.onopen = () => { sseRetryDelay = 1000; }; // reset backoff on successful connect
   es.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
       if (data.type === 'session_started') {
         document.getElementById('liveSessionCard').style.display = '';
-        document.getElementById('liveSessionLog').textContent = 'Session starting...\n';
+        // Don't clear — keep the "Please wait" message and append
+        document.getElementById('liveSessionLog').textContent += 'Session process started.\n';
         refreshDashboard();
       } else if (data.type === 'session_log') {
+        const card = document.getElementById('liveSessionCard');
+        if (card.style.display === 'none') card.style.display = '';
         const el = document.getElementById('liveSessionLog');
         el.textContent += data.message + '\n';
+        // Cap log to last 200 lines to prevent unbounded memory growth
+        const lines = el.textContent.split('\n');
+        if (lines.length > 200) {
+          el.textContent = lines.slice(-200).join('\n');
+        }
         el.scrollTop = el.scrollHeight;
       } else if (data.type === 'session_ended') {
-        document.getElementById('liveSessionLog').textContent += `\nSession ended (code ${data.code})\n`;
+        const logEl = document.getElementById('liveSessionLog');
+        const codeText = data.code === 'stopped' ? 'stopped by user' : `code ${data.code}`;
+        logEl.textContent += `\nSession ended (${codeText})\n`;
+        // Reset Start button
+        const btn = document.getElementById('btnStart');
+        btn.textContent = 'Start Session';
+        btn.disabled = false;
         refreshDashboard();
         setTimeout(() => {
           const card = document.getElementById('liveSessionCard');
           if (card) card.style.display = 'none';
-        }, 30000);
+        }, 15000);
       }
     } catch {}
   };
-  es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
+  es.onerror = () => {
+    es.close();
+    // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 30s
+    setTimeout(connectSSE, sseRetryDelay);
+    sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_MAX_RETRY);
+  };
 }
 
 // ── Delegated click handler for clickable rows ──────────────────────

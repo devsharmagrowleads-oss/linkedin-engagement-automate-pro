@@ -4,25 +4,10 @@ const log = require('../utils/logger');
 
 /**
  * Post a comment on a LinkedIn post.
- *
- * Flow:
- * 1. Locate the post element
- * 2. Scroll into view
- * 3. Simulate thinking delay
- * 4. Click the comment button to open comment box
- * 5. Type the comment with human-like keystrokes
- * 6. Brief review pause
- * 7. Submit
- *
- * @param {import('playwright').Page} page
- * @param {object} post - { urn, author, text, postUrl }
- * @param {string} commentText - The generated comment to post
- * @param {boolean} dryRun - If true, skip typing and submission
- * @returns {{ success: boolean, error?: string }}
+ * Uses Ctrl+Enter for submission (no DOM injection fingerprint).
  */
-async function commentOnPost(page, post, commentText, dryRun) {
+async function commentOnPost(page, post, commentText, dryRun, personality) {
   try {
-    // Find the post — try componentkey on element itself, then as parent
     const directEl = page.locator(`div[componentkey="${post.urn}"]`).first();
     const parentEl = page.locator(`div[role="listitem"]:has(div[componentkey="${post.urn}"])`).first();
 
@@ -40,7 +25,7 @@ async function commentOnPost(page, post, commentText, dryRun) {
     await sleep(humanDelay(500, 1000));
 
     // Simulate thinking before commenting
-    await sleep(thinkingDelay(commentText.length));
+    await sleep(thinkingDelay(commentText.length, personality));
 
     if (dryRun) {
       log.info(`[DRY RUN] Would comment on ${post.author}: "${commentText}"`);
@@ -48,8 +33,13 @@ async function commentOnPost(page, post, commentText, dryRun) {
     }
 
     // Click the comment button to open comment box
-    const commentBtn = activePostEl.locator(SELECTORS.commentButton).first();
-    const btnVisible = await commentBtn.isVisible().catch(() => false);
+    let commentBtn = activePostEl.locator(SELECTORS.commentButton).first();
+    let btnVisible = await commentBtn.isVisible().catch(() => false);
+
+    if (!btnVisible) {
+      commentBtn = activePostEl.locator(`button:has-text("${SELECTORS.commentButtonText}")`).first();
+      btnVisible = await commentBtn.isVisible().catch(() => false);
+    }
 
     if (!btnVisible) {
       return { success: false, error: 'Comment button not found' };
@@ -58,21 +48,24 @@ async function commentOnPost(page, post, commentText, dryRun) {
     await humanClick(page, commentBtn);
     await sleep(humanDelay(800, 1500));
 
-    // Wait for comment input to appear (with retry)
+    // Wait for comment input (with retry)
     let commentInput = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      // Try multiple selector strategies for the comment input
-      const inputLocator = page.locator(SELECTORS.commentInput).last();
-      const inputVisible = await inputLocator.isVisible({ timeout: 3000 }).catch(() => false);
 
-      if (inputVisible) {
-        commentInput = inputLocator;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const pageInput = page.locator('div[role="textbox"][aria-label*="comment" i]').last();
+      if (await pageInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+        commentInput = pageInput;
+        break;
+      }
+
+      const anyInput = page.locator('div[role="textbox"][contenteditable="true"]').last();
+      if (await anyInput.isVisible({ timeout: 1000 }).catch(() => false)) {
+        commentInput = anyInput;
         break;
       }
 
       if (attempt === 0) {
         log.warn('Comment input not found, retrying...');
-        // Move mouse away and click comment button again
         const box = await commentBtn.boundingBox().catch(() => null);
         if (box) {
           await page.mouse.move(box.x - 50, box.y - 50);
@@ -84,41 +77,42 @@ async function commentOnPost(page, post, commentText, dryRun) {
     }
 
     if (!commentInput) {
-      // Press Escape to clean up
       await page.keyboard.press('Escape').catch(() => {});
       return { success: false, error: 'Comment input not found after retry' };
     }
 
-    // Type the comment with human-like keystrokes (humanType clicks to focus internally)
-    await humanType(page, commentInput, commentText);
+    // Type the comment with human-like keystrokes + personality (typos, pacing)
+    await humanType(page, commentInput, commentText, personality);
 
-    // Brief review pause (simulating reading what was typed before submitting)
-    await sleep(humanDelay(500, 1500));
+    // Brief review pause (reading what was typed)
+    await sleep(humanDelay(600, 2000));
 
-    // Submit the comment
-    // Try clicking submit button first, then fallback to Ctrl+Enter
-    const submitBtn = page.locator(SELECTORS.commentSubmit).first();
-    const submitVisible = await submitBtn.isVisible().catch(() => false);
+    // Submit using Ctrl+Enter (LinkedIn native shortcut — no DOM injection)
+    await page.keyboard.press('Control+Enter');
+    await sleep(humanDelay(1500, 3000));
 
-    if (submitVisible) {
-      await humanClick(page, submitBtn);
-    } else {
-      // Many LinkedIn comment boxes submit on Ctrl+Enter or Enter
-      await page.keyboard.press('Control+Enter');
+    // Verify submission: check if textbox cleared
+    const textRemaining = await commentInput.textContent().catch(() => '');
+    if (textRemaining && textRemaining.trim().length > 5) {
+      // Ctrl+Enter didn't work — try finding submit button via locator (no DOM mutation)
+      log.warn('Ctrl+Enter did not submit, trying button click...');
+      const submitBtn = page.locator('button:has-text("Comment"):not([aria-label*="Comment on"])').last();
+      const submitVisible = await submitBtn.isVisible({ timeout: 2000 }).catch(() => false);
+      if (submitVisible) {
+        await humanClick(page, submitBtn);
+        await sleep(humanDelay(1000, 2000));
+      } else {
+        // Last resort: Enter key
+        await page.keyboard.press('Enter');
+        await sleep(humanDelay(1000, 2000));
+      }
     }
-
-    await sleep(humanDelay(1000, 2000));
 
     log.success(`Commented on ${post.author}: "${commentText.substring(0, 50)}..."`);
     return { success: true };
   } catch (err) {
     log.error(`Failed to comment on post by ${post.author}: ${err.message}`);
-
-    // Try to dismiss any open comment box to avoid leaving a draft
-    try {
-      await page.keyboard.press('Escape');
-    } catch {}
-
+    try { await page.keyboard.press('Escape'); } catch {}
     return { success: false, error: err.message };
   }
 }

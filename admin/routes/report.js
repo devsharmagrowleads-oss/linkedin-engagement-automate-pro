@@ -7,7 +7,7 @@ router.post('/', (req, res) => {
   try {
     const { userName, team, linkedinName, linkedinUrl, sessionId } = req.body;
 
-    if (!userName || !sessionId) {
+    if (!userName || !String(userName).trim() || !sessionId || !String(sessionId).trim()) {
       return res.status(400).json({ error: 'userName and sessionId are required' });
     }
 

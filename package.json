@@ -4,10 +4,16 @@
   "description": "Automated LinkedIn post reactions with human-like behavior",
   "main": "src/index.js",
   "scripts": {
+    "setup": "node scripts/setup.js",
     "start": "node src/index.js",
     "daemon": "node src/index.js --daemon",
     "dashboard": "node src/server/server.js",
-    "login": "node src/login.js"
+    "login": "node src/login.js",
+    "login:all": "node scripts/login-all.js",
+    "run:all": "node scripts/run-all.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "keywords": [],
   "author": "",

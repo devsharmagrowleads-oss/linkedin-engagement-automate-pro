@@ -8,14 +8,35 @@ try {
 }
 
 let client = null;
-let cachedKey = null;
+let cachedKeyHash = null;
+
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
 
 function getClient(apiKey) {
-  if (apiKey && apiKey !== cachedKey && OpenAI) {
+  const hash = apiKey ? simpleHash(apiKey) : null;
+  if (apiKey && hash !== cachedKeyHash && OpenAI) {
     client = new OpenAI({ apiKey });
-    cachedKey = apiKey;
+    cachedKeyHash = hash;
   }
   return client;
+}
+
+/**
+ * Sanitize text before injecting into prompts to mitigate prompt injection.
+ * Strips control characters and truncates.
+ */
+function sanitizeForPrompt(text, maxLen = 1000) {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // strip control chars
+    .substring(0, maxLen)
+    .trim();
 }
 
 /**
@@ -23,32 +44,42 @@ function getClient(apiKey) {
  */
 function buildPrompt(postText, author, existingComments, persona) {
   const systemParts = [
-    'Write a brief LinkedIn comment (1-3 sentences) on the following post. Your comment should:',
-    '- Add value to the conversation (a perspective, question, or insight)',
-    '- Sound natural and conversational, not generic or templated',
-    '- Never reveal you are AI or automated',
-    '- Never use hashtags or excessive punctuation',
-    '- Be between 15-300 characters',
+    'Write a short LinkedIn comment (1-2 sentences max) on the following post.',
     '',
-    'Your persona/voice:',
+    'Rules:',
+    '- Keep it under 150 characters if possible, never over 200',
+    '- Write like a real person texting a colleague, not a corporate speaker',
+    '- Use simple everyday words. No complex vocabulary.',
+    '- NEVER use em-dashes (--) or en-dashes. Use commas or periods instead.',
+    '- No hashtags, no emojis, no excessive punctuation',
+    '- Do not start with "Great post", "Great insights", "Love this", or "Absolutely"',
+    '- Do not use words like: leverage, foster, cultivate, delve, landscape, navigate, robust, holistic, nuance, transformative, paradigm, comprehensive, resonate, pivotal, harnessing, invaluable, commendable, remarkable, fascinating',
+    '- If others already commented, do NOT repeat what they said. Say something different.',
+    '- Never reveal you are AI or automated',
+    '- Either share a quick honest opinion OR ask one simple question. Not both.',
+    '',
+    'Your voice:',
     persona,
   ];
 
-  const userParts = [`Post by ${author}:`, postText, ''];
+  const safeAuthor = sanitizeForPrompt(author, 60);
+  const safePostText = sanitizeForPrompt(postText, 1000);
+
+  const userParts = [`Post by ${safeAuthor}:`, safePostText, ''];
 
   if (existingComments && existingComments.length > 0) {
-    userParts.push('Other people\'s comments on this post:');
+    userParts.push('Comments already on this post (DO NOT repeat these):');
     for (const c of existingComments.slice(0, 10)) {
-      userParts.push(`${c.author}: ${c.text}`);
+      userParts.push(`- ${sanitizeForPrompt(c.author, 60)}: ${sanitizeForPrompt(c.text, 300)}`);
     }
     userParts.push('');
-    userParts.push('Write a comment that adds something new to this conversation.');
+    userParts.push('Add something new that nobody else said yet. Keep it short.');
   } else {
-    userParts.push('Be a conversation starter - share a perspective or ask a thoughtful question.');
+    userParts.push('No comments yet. Be the first. Keep it short and real.');
   }
 
   userParts.push('');
-  userParts.push('Write your comment. Output ONLY the comment text, nothing else.');
+  userParts.push('Output ONLY the comment text, nothing else.');
 
   return {
     system: systemParts.join('\n'),
@@ -86,7 +117,7 @@ async function generateComment(postText, author, existingComments, persona, mode
         ],
         max_tokens: 150,
         temperature: 0.9,
-      }, { timeout: 10000 }); // 10 second timeout
+      }, { timeout: 15000 }); // 15 second timeout — not latency-sensitive
 
       const comment = (response.choices[0]?.message?.content || '').trim();
       const tokensUsed = response.usage?.total_tokens || 0;
@@ -121,6 +152,7 @@ async function generateComment(postText, author, existingComments, persona, mode
     }
   }
 
+  return { error: 'Exhausted retries', code: 'RETRY_EXHAUSTED' };
 }
 
 module.exports = { generateComment };

@@ -3,81 +3,92 @@ const log = require('../utils/logger');
 
 /**
  * Extract structured data from a single feed post element.
- * LinkedIn now uses obfuscated class names, so we rely on
- * structural selectors, aria-labels, and text content parsing.
+ * Uses a SINGLE evaluate() call to minimize CDP round-trips.
+ * All filtering (promoted, suggested, company) happens inside the browser context.
  */
-async function extractPost(postLocator) {
+async function extractPost(postLocator, opts = {}) {
+  const { includeReacted = false } = opts;
   try {
     // Get unique identifier — componentkey may be on the listitem or a child div
     let urn = await postLocator.getAttribute(SELECTORS.feedPostUrn);
     if (!urn) {
-      // Try finding componentkey on a direct child
       urn = await postLocator.locator(`div[${SELECTORS.feedPostUrn}]`).first()
         .getAttribute(SELECTORS.feedPostUrn).catch(() => null);
     }
     if (!urn) return null;
 
-    // Check if already reacted or promoted (quick checks first)
-    const [alreadyReacted, isPromoted] = await Promise.all([
-      postLocator.locator(SELECTORS.alreadyReacted).count().then(c => c > 0).catch(() => false),
-      checkIfPromoted(postLocator),
-    ]);
+    // Check if already reacted (quick Playwright check — no evaluate needed)
+    if (!includeReacted) {
+      const alreadyReacted = await postLocator.locator(SELECTORS.alreadyReacted)
+        .count().then(c => c > 0).catch(() => false);
+      if (alreadyReacted) return null;
+    }
 
-    if (alreadyReacted || isPromoted) return null;
+    // SINGLE consolidated evaluate() call: filters + extraction in one round-trip
+    const postData = await postLocator.evaluate((el) => {
+      const text = (el.innerText || '').trim();
+      if (!text) return { skip: 'empty' };
 
-    // Check that a React button exists (confirms this is a real post)
-    const hasReactBtn = await postLocator
-      .locator(SELECTORS.likeButton + ', ' + SELECTORS.likeButtonAria)
-      .count().then(c => c > 0).catch(() => false);
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const headerLines = lines.slice(0, 8);
 
-    if (!hasReactBtn) return null;
+      // ── Filter: Promoted/Sponsored ──
+      for (const line of headerLines) {
+        if (line === 'Promoted' || line === 'Sponsored') return { skip: 'promoted' };
+      }
+      // Check aria-labels for promoted indicators
+      if (el.querySelector('[aria-label*="Promoted"], [aria-label*="Sponsored"]')) {
+        return { skip: 'promoted' };
+      }
 
-    // Extract text content and post URL from the post
-    // Since LinkedIn obfuscates classes, we get innerText and parse it
-    const postData = await postLocator.evaluate(el => {
-      // Try to find the permalink to the post (usually the timestamp link)
-      // LinkedIn post links contain /feed/update/ or /posts/ in the URL
+      // ── Filter: Suggested ──
+      for (const line of headerLines) {
+        if (line === 'Suggested') return { skip: 'suggested' };
+      }
+
+      // ── Filter: Company page (author followed by "X followers") ──
+      const contextPattern = /^(.+?)\s+(likes? this|commented on this|reposted this|shared this|celebrates this|finds this insightful|finds this funny|loves this|supports this)$/i;
+      let authorLine = null;
+      for (const line of headerLines) {
+        if (line === 'Feed post' || line === 'Suggested') continue;
+        if (contextPattern.test(line)) continue;
+        authorLine = line;
+        break;
+      }
+      // Company detection: skip only "Suggested", allow company posts through
+      // (many feeds are dominated by company content shares)
+
+      // ── Check React button exists ──
+      const hasReactBtn = !!el.querySelector(
+        'button[aria-label*="Reaction button"], button[aria-label*="React"]'
+      );
+      if (!hasReactBtn) return { skip: 'no_react_btn' };
+
+      // ── Extract post data ──
       let postUrl = '';
       const links = el.querySelectorAll('a[href]');
       for (const link of links) {
         const href = link.getAttribute('href') || '';
         if (href.includes('/feed/update/') || href.includes('/posts/')) {
-          postUrl = href.split('?')[0]; // Strip query params
+          postUrl = href.split('?')[0];
           break;
         }
       }
 
-      const text = (el.innerText || '').trim();
-      const lines = text.split('\n').filter(l => l.trim());
-
       let author = 'Unknown';
-      let postText = '';
       let contentStartIdx = 0;
-
-      // Context patterns: "X likes this", "X commented on this", "X finds this insightful", etc.
-      const contextPattern = /^(.+?)\s+(likes? this|commented on this|reposted this|shared this|celebrates this|finds this insightful|finds this funny|loves this|supports this)$/i;
-
-      // Parse header area to find author and content start
       let foundAuthorBlock = false;
-      for (let i = 0; i < Math.min(lines.length, 10); i++) {
-        const line = lines[i].trim();
 
-        // Skip hidden labels and LinkedIn UI text
+      for (let i = 0; i < Math.min(lines.length, 10); i++) {
+        const line = lines[i];
         if (line === 'Feed post' || line === '…' || line === '... more') continue;
         if (/^(Suggested|Promoted|Sponsored|Follow)$/i.test(line)) continue;
-
-        // Context line (e.g. "GenAI Works likes this") — skip, real author is next
-        const ctxMatch = line.match(contextPattern);
-        if (ctxMatch) continue;
-
-        // Follower/connection count or timestamp line — marks end of author block
+        if (contextPattern.test(line)) continue;
         if (/\d[\d,]*\s*(followers|connections)/.test(line) || /^\d+[dhwmo]\s*•/.test(line)) {
           contentStartIdx = i + 1;
           foundAuthorBlock = true;
           continue;
         }
-
-        // The actual author name: short, no punctuation, before the follower line
         if (!foundAuthorBlock && author === 'Unknown' && line.length > 1 && line.length < 60 && line !== 'Feed post') {
           if (!/[.!?]$/.test(line) && !contextPattern.test(line)) {
             author = line;
@@ -85,36 +96,33 @@ async function extractPost(postLocator) {
         }
       }
 
-      // Post text: everything after the author/metadata section
       const skipPatterns = /^(Feed post|…\s*more|Show translation|\d+\s*comments?|\d+\s*likes?|\d+\s*reactions?|Like|Comment|Repost|Send|Share|Report this|Copy link|Embed|Follow|Connect|Message|See more|React|Celebrate|Support|Love|Insightful|Funny|Reaction button|…\s*$)/i;
-
       const contentLines = [];
       for (let i = contentStartIdx; i < lines.length; i++) {
-        const line = lines[i].trim();
+        const line = lines[i];
         if (!line || line.length < 3) continue;
         if (skipPatterns.test(line)) continue;
         contentLines.push(line);
       }
-      postText = contentLines.join(' ').substring(0, 1000);
+      const postText = contentLines.join(' ').substring(0, 1000);
 
-      // Extract engagement counts from post text
       let reactionCount = 0;
       let commentCount = 0;
-
-      // Look for patterns like "42 reactions", "12 comments", "1,234 likes"
       const reactionMatch = text.match(/(\d[\d,]*)\s*(reactions?|likes?)/i);
-      if (reactionMatch) {
-        reactionCount = parseInt(reactionMatch[1].replace(/,/g, ''), 10) || 0;
-      }
+      if (reactionMatch) reactionCount = parseInt(reactionMatch[1].replace(/,/g, ''), 10) || 0;
       const commentMatch = text.match(/(\d[\d,]*)\s*comments?/i);
-      if (commentMatch) {
-        commentCount = parseInt(commentMatch[1].replace(/,/g, ''), 10) || 0;
-      }
+      if (commentMatch) commentCount = parseInt(commentMatch[1].replace(/,/g, ''), 10) || 0;
 
       return { author, postText, postUrl, reactionCount, commentCount };
     });
 
     if (!postData) return null;
+
+    // Handle filter results
+    if (postData.skip) {
+      if (postData.skip === 'suggested') log.info(`  Skipping suggested post`);
+      return null;
+    }
 
     const cleanText = (postData.postText || '').trim();
     if (cleanText.length < 20) return null;
@@ -134,42 +142,20 @@ async function extractPost(postLocator) {
 }
 
 /**
- * Check if a post is promoted/sponsored
- */
-async function checkIfPromoted(postLocator) {
-  try {
-    // Check for promoted indicators
-    for (const selector of SELECTORS.promotedIndicators) {
-      const count = await postLocator.locator(selector).count();
-      if (count > 0) return true;
-    }
-
-    // Check text content for "Promoted" or "Sponsored" labels
-    const text = await postLocator.evaluate(el => {
-      // Check just the first few lines (header area)
-      const lines = (el.innerText || '').split('\n').slice(0, 6);
-      return lines.join(' ');
-    });
-    if (text && (text.includes('Promoted') || text.includes('Sponsored'))) return true;
-
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Extract all visible posts from the current feed view
  */
-async function extractVisiblePosts(page) {
-  const postLocators = page.locator(SELECTORS.feedPost);
+async function extractVisiblePosts(page, opts = {}) {
+  const selector = opts.includeReacted
+    ? 'div[role="listitem"]:has(button[aria-label*="React"])'
+    : SELECTORS.feedPost;
+  const postLocators = page.locator(selector);
   const count = await postLocators.count();
 
   if (count === 0) return [];
 
   // Extract all posts in parallel
   const results = await Promise.allSettled(
-    Array.from({ length: count }, (_, i) => extractPost(postLocators.nth(i)))
+    Array.from({ length: count }, (_, i) => extractPost(postLocators.nth(i), opts))
   );
 
   return results
@@ -177,4 +163,4 @@ async function extractVisiblePosts(page) {
     .map(r => r.value);
 }
 
-module.exports = { extractPost, extractVisiblePosts };
+module.exports = { extractVisiblePosts };

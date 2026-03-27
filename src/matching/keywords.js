@@ -50,11 +50,10 @@ class KeywordMatcher {
     const text = (postText || '').toLowerCase();
     if (text.length < 20) return null;
 
-    // If reactToAll is enabled, match ~30% of posts (cap to avoid detection)
+    // If reactToAll is enabled, match ~15% of posts (cap to avoid detection)
     if (this.reactToAll) {
-      this._reactToAllCounter++;
-      // Only match roughly 30% of posts — skip the rest to look human
-      if (this._reactToAllCounter % 3 !== 0 && Math.random() > 0.35) {
+      // Pure random — no counter-based patterns that ML can detect
+      if (Math.random() > 0.15) {
         return null;
       }
       return { matched: true, keyword: '*', level: 'all' };

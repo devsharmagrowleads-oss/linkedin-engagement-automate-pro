@@ -14,27 +14,28 @@ const { visitProfile, expandPost, randomNavigation, browseOnlySession } = requir
 const { reportSession } = require('./reporting/reporter');
 const db = require('./database/db');
 const { tryCommentOnPost } = require('./feed/comment-orchestrator');
+const { generateSessionPersonality } = require('./behavior/session-personality');
+const { getAccountMaturityMultiplier } = require('./behavior/ramp-up');
 
-// ── Window variance: randomize session windows daily ────────────────
+// ── Module-level session tracking (for signal handlers) ─────────────
+let _activeSessionId = null;
+let _activeStats = null;
+
+const LOCK_STALE_TTL = 30 * 60 * 1000; // 30 minutes
+
+// ── Window variance: TRUE random (not date-seeded) ──────────────────
 
 function getWindowVariance() {
-  // Use date as seed so variance is consistent within a day but changes daily
-  const daySeed = parseInt(db.getTodayStr().replace(/-/g, ''), 10);
-  const pseudoRandom = (seed) => {
-    const x = Math.sin(seed) * 10000;
-    return x - Math.floor(x);
-  };
   const varianceRange = config.windowVarianceMinutes;
-  return Math.floor(pseudoRandom(daySeed) * varianceRange * 2) - varianceRange;
+  return Math.floor(Math.random() * varianceRange * 2) - varianceRange;
 }
 
-// Determine which session window we're in (with daily variance)
 function getCurrentWindow() {
   const now = new Date();
   const hours = now.getHours();
   const minutes = now.getMinutes();
   const time = hours * 60 + minutes;
-  const variance = getWindowVariance(); // ±N minutes, consistent per day
+  const variance = getWindowVariance();
 
   const windows = [
     { name: 'morning', env: config.morningWindow },
@@ -49,13 +50,12 @@ function getCurrentWindow() {
     const startMin = sh * 60 + sm + variance;
     const endMin = eh * 60 + em + variance;
 
-    // Include a generous buffer after window (for jitter)
     if (time >= startMin && time <= endMin + config.maxJitterMinutes) {
       return w.name;
     }
   }
 
-  return 'manual'; // Outside any window — manual run
+  return 'manual';
 }
 
 async function runSession() {
@@ -64,43 +64,39 @@ async function runSession() {
   log.info(`LinkedIn Auto-React Session (${windowName})`);
   log.info(`========================================\n`);
 
-  // ── Check captcha cooldown (#4) ────────────────────────────────
+  // ── Check captcha cooldown ────────────────────────────────────
   if (db.isCooldownActive('captcha')) {
     log.warn('Captcha cooldown is active — skipping session to avoid ban escalation.');
     return 0;
   }
 
-  // ── Check skip day (#2) ────────────────────────────────────────
+  // ── Check skip day (applies to all modes including manual) ───
   const today = db.getTodayStr();
-  if (windowName !== 'manual') {
-    if (db.isSkipDay(today)) {
-      log.info('Today is a skip day — no automated sessions. Looks more human.');
-      return 0;
-    }
-    // Decide if today should be a skip day (only on first session check)
-    const sessionsToday = db.getSessionsToday();
-    if (sessionsToday.length === 0 && Math.random() * 100 < config.skipDayPercent) {
-      db.markSkipDay(today);
-      log.info(`Randomly skipping today (${config.skipDayPercent}% chance). More human-like pattern.`);
-      return 0;
-    }
+  const sessionsToday = db.getSessionsToday();
+  if (db.isSkipDay(today)) {
+    log.info('Today is a skip day — no sessions. Override with FORCE_NO_SKIP=1.');
+    if (!process.env.FORCE_NO_SKIP) return 0;
+    log.info('FORCE_NO_SKIP set — proceeding anyway.');
+  } else if (sessionsToday.length === 0 && Math.random() * 100 < config.skipDayPercent) {
+    db.markSkipDay(today);
+    log.info(`Randomly skipping today (${config.skipDayPercent}% chance). Override with FORCE_NO_SKIP=1.`);
+    if (!process.env.FORCE_NO_SKIP) return 0;
+    log.info('FORCE_NO_SKIP set — proceeding anyway.');
   }
 
-  // Concurrent session guard (atomic lockfile creation with O_EXCL)
+  // Concurrent session guard
   const lockDir = path.dirname(config.lockfilePath);
   if (!fs.existsSync(lockDir)) fs.mkdirSync(lockDir, { recursive: true });
 
   try {
-    // Check for stale lock first
     if (fs.existsSync(config.lockfilePath)) {
       const lockAge = Date.now() - fs.statSync(config.lockfilePath).mtimeMs;
-      if (lockAge < 30 * 60 * 1000) {
+      if (lockAge < LOCK_STALE_TTL) {
         log.warn('Another session is running (lockfile exists). Exiting.');
         return 0;
       }
       fs.unlinkSync(config.lockfilePath);
     }
-    // Atomic create — fails if another process created it between check and here
     fs.writeFileSync(config.lockfilePath, `${process.pid}`, { flag: 'wx' });
   } catch (err) {
     if (err.code === 'EEXIST') {
@@ -110,33 +106,53 @@ async function runSession() {
     throw err;
   }
 
-  // Random jitter (0 to maxJitterMinutes)
-  if (windowName !== 'manual' && !process.env.FORCE_NO_JITTER) {
-    const jitterMs = Math.floor(Math.random() * config.maxJitterMinutes * 60 * 1000);
+  // Random jitter (shorter for manual mode so you're not waiting forever)
+  if (!process.env.FORCE_NO_JITTER) {
+    const maxJitter = windowName === 'manual'
+      ? Math.min(config.maxJitterMinutes, 5)  // manual: cap at 5 min
+      : config.maxJitterMinutes;               // daemon: full range
+    const jitterMs = Math.floor(Math.random() * maxJitter * 60 * 1000);
     const jitterMin = Math.round(jitterMs / 60000);
     log.info(`Applying ${jitterMin} minute jitter delay...`);
     await sleep(jitterMs);
   }
 
-  // Database maintenance
   db.pruneOldData();
 
-  // ── Check if this should be a browse-only session (#7) ─────────
-  const isBrowseOnly = windowName !== 'manual' && Math.random() * 100 < config.browseOnlyPercent;
+  // ── Generate session personality ──────────────────────────────
+  const personality = generateSessionPersonality({
+    reactionDelayMinSec: config.reactionDelayMinSec,
+    reactionDelayMaxSec: config.reactionDelayMaxSec,
+    matchSkipMin: config.matchSkipMin,
+    matchSkipMax: config.matchSkipMax,
+    typingSpeedMin: config.typingSpeedMin,
+    typingSpeedMax: config.typingSpeedMax,
+  });
+  log.info(`Session personality: ${personality.tempo} tempo, ${personality.sessionType} style, fatigue=${personality.fatigueRate.toFixed(3)}`);
 
-  // Set up daily target
-  const dailyTarget = db.ensureDailyTarget(config.dailyTargetMin, config.dailyTargetMax);
+  // ── Account maturity ramp-up ──────────────────────────────────
+  const maturity = config.enableRampUp ? getAccountMaturityMultiplier(db) : 1.0;
+  if (maturity < 1.0) {
+    log.info(`Account ramp-up active: ${Math.round(maturity * 100)}% activity level`);
+  }
+
+  // ── Browse-only session check (applies to all modes) ─────────
+  const isBrowseOnly = Math.random() * 100 < config.browseOnlyPercent;
+
+  // ── Daily target with ramp-up applied ─────────────────────────
+  const adjustedMin = Math.round(config.dailyTargetMin * maturity);
+  const adjustedMax = Math.round(config.dailyTargetMax * maturity);
+  const dailyTarget = db.ensureDailyTarget(adjustedMin, adjustedMax);
   const progress = db.getDailyProgress();
   const remaining = dailyTarget.target - progress.achieved;
 
   if (!isBrowseOnly && remaining <= 0) {
-    log.info(`Daily target already met (${progress.achieved}/${dailyTarget.target}). Skipping session.`);
+    log.info(`Daily target already met (${progress.achieved}/${dailyTarget.target}). Skipping.`);
     cleanup();
     return 0;
   }
 
-  // Calculate session target (distribute across remaining windows)
-  const sessionsToday = db.getSessionsToday();
+  // Calculate session target
   const completedSessions = sessionsToday.filter(s => s.status === 'completed').length;
   const windowCount = [config.morningWindow, config.afternoonWindow, config.eveningWindow].filter(Boolean).length;
   const remainingSessions = Math.max(1, windowCount - completedSessions);
@@ -144,18 +160,18 @@ async function runSession() {
   const sessionTarget = isBrowseOnly ? 0 : Math.max(minPerSession, Math.ceil(remaining / remainingSessions));
 
   if (isBrowseOnly) {
-    log.info(`Browse-only session — no reactions this round. Diversifying engagement pattern.`);
+    log.info(`Browse-only session — no reactions. Diversifying engagement pattern.`);
   } else {
     log.info(`Daily target: ${dailyTarget.target} | Already done: ${progress.achieved} | This session: ~${sessionTarget}`);
   }
-  log.warn('Automated session starting. Avoid LinkedIn in your browser for the next ~15 minutes.\n');
+  log.warn('Automated session starting. Avoid LinkedIn in your browser.\n');
 
   // Load keywords config
   const keywordsConfig = config.loadKeywords();
   const matcher = new KeywordMatcher(keywordsConfig);
   const reactionSelector = new ReactionSelector(keywordsConfig.reactionMap);
 
-  // ── Auto-Comment setup ──────────────────────────────────────────────
+  // ── Auto-Comment setup ────────────────────────────────────────
   const commentingEnabled = config.enableComments && config.openaiApiKey;
   let commentConfig = null;
   let commentDailyTarget = null;
@@ -163,17 +179,15 @@ async function runSession() {
 
   if (commentingEnabled) {
     commentConfig = config.loadCommenting();
-    commentDailyTarget = db.ensureCommentDailyTarget(config.dailyCommentMin, config.dailyCommentMax);
+    const adjCommentMin = Math.round(config.dailyCommentMin * maturity);
+    const adjCommentMax = Math.round(config.dailyCommentMax * maturity);
+    commentDailyTarget = db.ensureCommentDailyTarget(adjCommentMin, adjCommentMax);
     const commentProgress = db.getCommentDailyProgress();
     const commentRemaining = commentDailyTarget.target - commentProgress.achieved;
-
-    // Distribute across remaining sessions
     const sessionCommentMin = Math.ceil(commentDailyTarget.target / Math.max(1, windowCount));
     sessionCommentTarget = isBrowseOnly ? 0 : Math.max(sessionCommentMin, Math.ceil(commentRemaining / remainingSessions));
 
-    if (config.commentDryRun) {
-      log.info(`Auto-Comment: DRY RUN mode (generate but don't post)`);
-    }
+    if (config.commentDryRun) log.info(`Auto-Comment: DRY RUN mode`);
     log.info(`Auto-Comment: target ${commentDailyTarget.target}/day | Done: ${commentProgress.achieved} | This session: ~${sessionCommentTarget}`);
   } else if (config.enableComments && !config.openaiApiKey) {
     log.warn('Auto-Comment: enabled but OPENAI_API_KEY not set — commenting disabled');
@@ -181,27 +195,22 @@ async function runSession() {
 
   // Start session tracking
   const sessionId = db.startSession(isBrowseOnly ? `${windowName}-browse` : windowName);
+  _activeSessionId = sessionId;
   const stats = {
-    postsScrolled: 0,
-    postsMatched: 0,
-    postsReacted: 0,
-    postsSkipped: 0,
-    postsCommented: 0,
-    status: 'completed',
-    errorMessage: null,
+    postsScrolled: 0, postsMatched: 0, postsReacted: 0,
+    postsSkipped: 0, postsCommented: 0, status: 'completed', errorMessage: null,
   };
+  _activeStats = stats;
 
   let context;
   const sessionStartedAt = new Date().toISOString();
   let linkedinIdentity = { name: 'Unknown', url: '' };
 
   try {
-    // Launch browser
     const browser = await launchBrowser();
     context = browser.context;
     const page = browser.page;
 
-    // Validate session and extract LinkedIn identity
     const sessionCheck = await validateSession(page);
     if (!sessionCheck.valid) {
       log.error('LinkedIn session is expired. Please click "Login to LinkedIn" in the dashboard.');
@@ -211,23 +220,21 @@ async function runSession() {
     }
     linkedinIdentity = { name: sessionCheck.linkedinName, url: sessionCheck.linkedinUrl };
 
-    // ── Random initial navigation (#9) — sometimes check other pages first
-    if (Math.random() < 0.35) {
-      await randomNavigation(page);
+    // ── Initial navigation (personality-driven) ──────────────────
+    if (Math.random() < personality.initialNavChance) {
+      await randomNavigation(page, personality);
     }
 
-    // ── Browse-only session (#7) ─────────────────────────────────
+    // ── Browse-only session ──────────────────────────────────────
     if (isBrowseOnly) {
-      const variance = Math.floor(config.maxSessionMinutes * 0.2);
+      const variance = Math.floor(config.maxSessionMinutes * 0.3);
       const browseMinutes = Math.max(5, config.maxSessionMinutes - variance + Math.floor(Math.random() * (variance * 2 + 1)));
-      await browseOnlySession(page, browseMinutes);
-
+      await browseOnlySession(page, browseMinutes, personality);
       log.info(`\n--- Session Summary ---`);
       log.info(`Browse-only session completed (no reactions)`);
       return 0;
     }
 
-    // Validate that LinkedIn selectors still work
     const selectorCheck = await validateSelectors(page);
     if (!selectorCheck.valid) {
       stats.status = 'error';
@@ -236,18 +243,18 @@ async function runSession() {
     }
 
     let reactedThisSession = 0;
-    let postsSinceLastNav = 0; // Track posts since last navigation diversion
+    let postsSinceLastNav = 0;
 
     // Comment tracking
     let postsSinceLastComment = 0;
-    let sessionCommentsFailed = 0; // consecutive API failures
-    let recentSessionComments = []; // for repetition detection
+    let sessionCommentsFailed = 0;
+    let recentSessionComments = [];
     const commentGap = config.commentMinGap + Math.floor(Math.random() * (config.commentMaxGap - config.commentMinGap + 1));
 
-    // Randomize max session duration — vary by ±20% around the configured value
-    const variance = Math.floor(config.maxSessionMinutes * 0.2);
-    const sessionMaxMinutes = Math.max(10, config.maxSessionMinutes - variance + Math.floor(Math.random() * (variance * 2 + 1)));
-    const sessionStartMs = Date.now(); // for elapsed-time checks
+    // Session duration with ±30% variance
+    const durationVariance = Math.floor(config.maxSessionMinutes * 0.3);
+    const sessionMaxMinutes = Math.max(10, config.maxSessionMinutes - durationVariance + Math.floor(Math.random() * (durationVariance * 2 + 1)));
+    const sessionStartMs = Date.now();
 
     // Scroll feed and react to matching posts
     await scrollFeed(
@@ -261,35 +268,30 @@ async function runSession() {
         for (const post of newPosts) {
           if (reactedThisSession >= sessionTarget) break;
 
-          // ── Expand "see more" on some posts (#6) — even non-matching ones
-          if (Math.random() < 0.12) {
+          // Expand "see more" (personality-driven probability)
+          if (Math.random() < personality.expandPostChance) {
             const postEl = page.locator(`div[componentkey="${post.urn}"]`).first();
             const visible = await postEl.isVisible().catch(() => false);
-            if (visible) {
-              await expandPost(page, postEl);
-            }
+            if (visible) await expandPost(page, postEl);
           }
 
-          // Check duplicate
           if (db.isAlreadyReacted(post.urn)) continue;
 
-          // Match keywords
           const match = matcher.matchAllTiers(post.text);
           if (!match) continue;
 
           stats.postsMatched++;
 
-          // Occasional skip
-          if (shouldSkip(stats.postsMatched, sessionTarget - reactedThisSession)) {
+          // Skip check (personality-driven: 60-80% of matches get skipped)
+          if (shouldSkip(stats.postsMatched, sessionTarget - reactedThisSession, personality)) {
             stats.postsSkipped++;
             continue;
           }
 
-          // Select reaction type
           const reactionType = reactionSelector.selectReaction(post.text);
 
-          // React
-          const success = await reactToPost(page, post, reactionType);
+          // React with personality
+          const success = await reactToPost(page, post, reactionType, personality);
           if (success) {
             const logged = db.logReaction(sessionId, post, reactionType, match.level, match.keyword);
             if (logged) {
@@ -299,33 +301,45 @@ async function runSession() {
             }
           }
 
-          // ── Visit author profile sometimes (#5) — 15% chance after reacting
-          if (Math.random() < 0.15) {
-            await visitProfile(page, post.author);
+          // Visit profile (personality-driven probability)
+          if (Math.random() < personality.profileVisitChance) {
+            await visitProfile(page, post.author, personality);
           }
 
-          // Delay between reactions
-          await sleep(humanDelay(3000, 15000));
+          // Delay between reactions — personality-driven + session fatigue
+          const fatigueFactor = 1 + (reactedThisSession * personality.fatigueRate);
+          await sleep(humanDelay(
+            Math.round(personality.reactionDelayRange[0] * fatigueFactor),
+            Math.round(personality.reactionDelayRange[1] * fatigueFactor)
+          ));
 
-          // ── Auto-Comment decision ─────────────────────────────────
+          // Occasional long distraction pause (stepped away, phone call, etc.)
+          if (Math.random() < personality.distractionChance) {
+            const pauseMs = humanDelay(personality.distractionRange[0], personality.distractionRange[1]);
+            log.info(`  [behavior] Taking a ${Math.round(pauseMs / 1000)}s break...`);
+            await sleep(pauseMs);
+          }
+
+          // ── Auto-Comment decision ──────────────────────────────
           postsSinceLastComment++;
-
           const sessionElapsedMin = (Date.now() - sessionStartMs) / 60000;
 
-          if (commentingEnabled && !isBrowseOnly
+          const shouldComment = commentingEnabled && !isBrowseOnly
             && sessionElapsedMin < sessionMaxMinutes - 5
             && sessionCommentsFailed < 3
             && stats.postsCommented < sessionCommentTarget
             && postsSinceLastComment >= commentGap
             && match
             && (post.reactionCount >= commentConfig.minEngagementReactions || post.commentCount >= commentConfig.minEngagementComments)
-            && !db.isAlreadyCommented(post.urn)
-          ) {
+            && !db.isAlreadyCommented(post.urn);
+
+          if (shouldComment) {
             const commentResult = await tryCommentOnPost(page, post, {
               sessionId, commentConfig, recentSessionComments,
               openaiModel: config.openaiModel, openaiApiKey: config.openaiApiKey,
               dryRun: config.commentDryRun,
               matchLevel: match.level, matchKeyword: match.keyword,
+              personality,
             });
 
             if (commentResult.apiError) sessionCommentsFailed++;
@@ -333,24 +347,29 @@ async function runSession() {
               postsSinceLastComment = 0;
               stats.postsCommented++;
               sessionCommentsFailed = 0;
+              if (commentResult.commentText) {
+                recentSessionComments.push(commentResult.commentText);
+                if (recentSessionComments.length > 5) recentSessionComments.shift();
+              }
               log.info(`  [Comment ${stats.postsCommented}/${sessionCommentTarget}] → "${post.author}"`);
             }
-
-            await sleep(humanDelay(2000, 5000));
+            await sleep(humanDelay(3000, 8000));
           }
         }
 
-        // ── Random navigation between scroll batches (#9)
-        // Every ~20 posts, do a random navigation to break the pattern
-        if (postsSinceLastNav >= 15 + Math.floor(Math.random() * 10)) {
+        // Random navigation (personality-driven interval and probability)
+        const navThreshold = personality.navIntervalRange[0]
+          + Math.floor(Math.random() * (personality.navIntervalRange[1] - personality.navIntervalRange[0]));
+        if (postsSinceLastNav >= navThreshold) {
           postsSinceLastNav = 0;
-          if (Math.random() < 0.3) {
-            await randomNavigation(page);
+          if (Math.random() < personality.navDiversionChance) {
+            await randomNavigation(page, personality);
           }
         }
       },
       // shouldStop callback
-      () => reactedThisSession >= sessionTarget
+      () => reactedThisSession >= sessionTarget,
+      personality
     );
 
     log.info(`\n--- Session Summary ---`);
@@ -359,21 +378,18 @@ async function runSession() {
   } catch (err) {
     const msg = (err.message || '').toLowerCase();
 
-    // Detect session expiry mid-run (auth redirect, login wall)
     const isAuthError = msg.includes('login') || msg.includes('authwall')
       || msg.includes('checkpoint') || msg.includes('/uas/');
     if (isAuthError) {
       stats.status = 'error';
       stats.errorMessage = 'Session expired mid-run';
       log.warn('LinkedIn session expired during session — ending gracefully.');
-      log.warn('Please re-login via the dashboard before the next session.');
     } else {
       stats.status = 'error';
       stats.errorMessage = err.message;
       log.error(`Session error: ${err.message}`);
     }
 
-    // Try to take a screenshot on error
     try {
       if (context) {
         const page = context.pages()[0];
@@ -385,18 +401,15 @@ async function runSession() {
           log.info(`Error screenshot saved: ${screenshotPath}`);
         }
       }
-    } catch {} // ignore screenshot errors
+    } catch {}
 
-    // ── Captcha cooldown (#4) — actually enforce a cooldown period
     if (msg.includes('captcha') || msg.includes('challenge')) {
-      log.warn('CAPTCHA detected — setting 24-hour cooldown to avoid ban escalation');
-      db.setCooldown('captcha', 24); // 24 hour cooldown
+      log.warn('CAPTCHA detected — setting 24-hour cooldown');
+      db.setCooldown('captcha', 24);
     }
   } finally {
-    // Single endSession call — always runs, never duplicated
     db.endSession(sessionId, stats);
 
-    // Report to admin server (fire-and-forget)
     await reportSession({
       linkedinName: linkedinIdentity.name,
       linkedinUrl: linkedinIdentity.url,
@@ -411,9 +424,9 @@ async function runSession() {
       startedAt: sessionStartedAt,
     });
 
-    if (context) {
-      await context.close().catch(() => {});
-    }
+    if (context) await context.close().catch(() => {});
+    _activeSessionId = null;
+    _activeStats = null;
     cleanup();
   }
 
@@ -423,64 +436,70 @@ async function runSession() {
 function printSessionSummary(sessionId, stats, dailyTarget) {
   const summary = db.getSessionSummary(sessionId);
   const progress = db.getDailyProgress();
-
   const reactionBreakdown = summary.reactions.map(r => `${r.count} ${r.reaction_type}`).join(', ');
   const matchBreakdown = summary.matchLevels.map(m => `${m.count} ${m.match_level}`).join(', ');
-
   log.info(`Reactions: ${stats.postsReacted} (${reactionBreakdown || 'none'})`);
   log.info(`Match breakdown: ${matchBreakdown || 'none'}`);
   log.info(`Posts scrolled: ${stats.postsScrolled} | Matched: ${stats.postsMatched} | Skipped: ${stats.postsSkipped}`);
-  if (stats.postsCommented > 0) {
-    log.info(`Comments posted: ${stats.postsCommented}`);
-  }
+  if (stats.postsCommented > 0) log.info(`Comments posted: ${stats.postsCommented}`);
   log.info(`Daily progress: ${progress.achieved}/${dailyTarget.target}`);
   log.info(`Status: ${stats.status}`);
 }
 
 function cleanup() {
   try {
-    if (fs.existsSync(config.lockfilePath)) {
-      fs.unlinkSync(config.lockfilePath);
-    }
-  } catch {} // ignore cleanup errors
+    if (fs.existsSync(config.lockfilePath)) fs.unlinkSync(config.lockfilePath);
+  } catch {}
 }
 
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  log.warn('Received SIGINT, shutting down gracefully...');
+// ── Graceful shutdown ────────────────────────────────────────────────
+
+function gracefulShutdown(signal, exitCode = 0) {
+  log.warn(`Received ${signal}, shutting down gracefully...`);
+  if (_activeSessionId) {
+    try {
+      const shutdownStats = _activeStats || {};
+      shutdownStats.status = 'stopped';
+      shutdownStats.errorMessage = `Process received ${signal}`;
+      db.endSession(_activeSessionId, shutdownStats);
+    } catch {}
+    _activeSessionId = null;
+    _activeStats = null;
+  }
   cleanup();
-  process.exit(0);
+  process.exit(exitCode);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT', 0));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM', 0));
+
+process.on('exit', () => {
+  if (_activeSessionId) {
+    try { db.forceEndSession(_activeSessionId, 'Process exited unexpectedly'); } catch {}
+    _activeSessionId = null;
+  }
 });
 
-process.on('SIGTERM', () => {
-  log.warn('Received SIGTERM, shutting down gracefully...');
-  cleanup();
-  process.exit(0);
-});
-
-// Handle unhandled rejections
 process.on('unhandledRejection', (err) => {
   log.error(`Unhandled rejection: ${err.message || err}`);
-  cleanup();
-  process.exit(1);
+  gracefulShutdown('unhandledRejection', 1);
 });
 
 // ── Daemon mode ──────────────────────────────────────────────────────
-// Usage: node src/index.js --daemon
-// Stays alive, checks every 5 minutes if we're inside a session window,
-// and runs a session when the time is right.
 
 async function daemon() {
   log.info('Daemon mode started. Will auto-trigger sessions during configured windows.');
-  log.info(`Anti-detection: ${config.skipDayPercent}% skip-day chance, ${config.browseOnlyPercent}% browse-only chance, ±${config.windowVarianceMinutes}min window variance`);
-  const CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  log.info(`Anti-detection: ${config.skipDayPercent}% skip-day, ${config.browseOnlyPercent}% browse-only, ±${config.windowVarianceMinutes}min variance`);
+  const CHECK_INTERVAL = 5 * 60 * 1000;
 
   while (true) {
     const window = getCurrentWindow();
     if (window !== 'manual') {
       log.info(`Inside "${window}" window — checking if session needed...`);
+      const maturity = config.enableRampUp ? getAccountMaturityMultiplier(db) : 1.0;
+      const adjustedMax = Math.round(config.dailyTargetMax * maturity);
+      const target = db.ensureDailyTarget(Math.round(config.dailyTargetMin * maturity), adjustedMax);
       const progress = db.getDailyProgress();
-      const target = db.ensureDailyTarget(config.dailyTargetMin, config.dailyTargetMax);
       if (progress.achieved < target.target) {
         await runSession();
       } else {

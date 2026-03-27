@@ -3,18 +3,14 @@ const { humanClick, humanDelay, readingTime, sleep } = require('../behavior/huma
 const log = require('../utils/logger');
 
 /**
- * React to a single post with the specified reaction type
- *
- * Flow:
- * 1. Scroll post into view
- * 2. Simulate reading time
- * 3. Hover over reaction button to open picker
- * 4. Select target reaction
- * 5. Click with human-like mouse movement
+ * React to a single post with the specified reaction type.
+ * Personality-driven: tempo affects reading time, hover duration, and adds occasional hesitation.
  */
-async function reactToPost(page, post, reactionType) {
+async function reactToPost(page, post, reactionType, personality) {
+  const p = personality || {};
+  const tempoFactor = p.tempo === 'fast' ? 0.6 : p.tempo === 'contemplative' ? 1.8 : 1.0;
+
   try {
-    // Find the post — try componentkey on element itself, then as parent of a child with it
     const directEl = page.locator(`div[componentkey="${post.urn}"]`).first();
     const parentEl = page.locator(`div[role="listitem"]:has(div[componentkey="${post.urn}"])`).first();
 
@@ -28,15 +24,18 @@ async function reactToPost(page, post, reactionType) {
 
     const activePostEl = directVisible ? directEl : parentEl;
 
-    // Scroll post into view
+    // Scroll into view
     await activePostEl.scrollIntoViewIfNeeded();
-    await sleep(humanDelay(500, 1000));
+    await sleep(humanDelay(
+      Math.round(400 * tempoFactor),
+      Math.round(1000 * tempoFactor)
+    ));
 
-    // Simulate reading the post
-    const readMs = readingTime(post.text);
+    // Simulate reading — scaled by tempo
+    const readMs = Math.round(readingTime(post.text) * tempoFactor);
     await sleep(readMs);
 
-    // Find the reaction button within this post
+    // Find the reaction button
     const reactionBtn = activePostEl.locator(SELECTORS.likeButton + ', ' + SELECTORS.likeButtonAria).first();
     const btnExists = await reactionBtn.isVisible().catch(() => false);
 
@@ -46,47 +45,70 @@ async function reactToPost(page, post, reactionType) {
     }
 
     if (reactionType === 'like') {
-      // Simple like - just click the button
+      // Occasional hesitation before clicking (personality-driven)
+      if (Math.random() < (p.hesitationChance || 0.06)) {
+        await sleep(humanDelay(800, 2500));
+      }
       await humanClick(page, reactionBtn);
       await sleep(humanDelay(300, 800));
       log.success(`Liked post by ${post.author}`);
       return true;
     }
 
-    // For other reactions, hover to open the reaction picker (with 1 retry)
+    // For other reactions, hover to open reaction picker
     const ariaLabel = SELECTORS.reactions[reactionType] || SELECTORS.reactions.like;
-    let pickerOpened = false;
+    const maxRetries = 1 + Math.floor(Math.random() * 2); // 1-2 retries (randomized)
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const box = await reactionBtn.boundingBox();
       if (!box) return false;
 
-      // Hover with slight offset on retry to avoid cached hover state
+      // Hover with slight offset on retry
       const offsetX = attempt === 0 ? 0 : (Math.random() - 0.5) * 6;
       const offsetY = attempt === 0 ? 0 : (Math.random() - 0.5) * 4;
       await page.mouse.move(box.x + box.width / 2 + offsetX, box.y + box.height / 2 + offsetY);
-      await sleep(humanDelay(1200, 2000));
+      // Hover duration scaled by tempo
+      await sleep(humanDelay(
+        Math.round(800 * tempoFactor),
+        Math.round(1800 * tempoFactor)
+      ));
 
       const targetReaction = page.locator(`button[aria-label="${ariaLabel}"]`).first();
-      pickerOpened = await targetReaction.isVisible({ timeout: 4000 }).catch(() => false);
+      const pickerOpened = await targetReaction.isVisible({ timeout: 4000 }).catch(() => false);
 
       if (pickerOpened) {
+        // Occasional reconsideration: hover over wrong reaction first (3%)
+        if (Math.random() < (p.reconsiderChance || 0.03)) {
+          const otherReactions = Object.values(SELECTORS.reactions).filter(r => r !== ariaLabel);
+          if (otherReactions.length > 0) {
+            const wrongLabel = otherReactions[Math.floor(Math.random() * otherReactions.length)];
+            const wrongBtn = page.locator(`button[aria-label="${wrongLabel}"]`).first();
+            const wrongVisible = await wrongBtn.isVisible({ timeout: 500 }).catch(() => false);
+            if (wrongVisible) {
+              const wrongBox = await wrongBtn.boundingBox().catch(() => null);
+              if (wrongBox) {
+                await page.mouse.move(wrongBox.x + wrongBox.width / 2, wrongBox.y + wrongBox.height / 2);
+                await sleep(humanDelay(300, 700));
+              }
+            }
+          }
+        }
+
         await humanClick(page, targetReaction);
-        await sleep(humanDelay(500, 1200));
+        await sleep(humanDelay(400, 1000));
         log.success(`Reacted "${reactionType}" to post by ${post.author}`);
         return true;
       }
 
-      if (attempt === 0) {
+      if (attempt < maxRetries) {
         log.warn(`Reaction picker didn't appear for ${post.author}, retrying...`);
-        // Move mouse away then back to reset hover state
         await page.mouse.move(box.x - 50, box.y - 50);
-        await sleep(humanDelay(300, 600));
+        await sleep(humanDelay(300, 800));
       }
     }
 
-    // Fallback: just click like if picker doesn't appear after retries
-    log.warn(`Reaction picker failed after retry, falling back to Like for ${post.author}`);
+    // Fallback to Like
+    log.warn(`Reaction picker failed, falling back to Like for ${post.author}`);
     await humanClick(page, reactionBtn);
     await sleep(humanDelay(300, 800));
     return true;
