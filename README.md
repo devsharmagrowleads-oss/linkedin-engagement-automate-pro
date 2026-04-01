@@ -1,6 +1,6 @@
-# Growleads
+# LinkedIn Auto Engage
 
-Automated LinkedIn engagement system that reacts to posts in your feed with human-like behavior. Runs 3 sessions daily, hits a configurable daily target (45-55 reactions), and includes a web dashboard for monitoring and configuration.
+Automated LinkedIn engagement system that reacts to posts and leaves AI-generated comments with human-like behavior. Runs 3 sessions daily, hits configurable daily targets (45-55 reactions, 3-8 comments), and includes a web dashboard for monitoring and configuration.
 
 Works on **Windows**, **macOS**, and **Linux**.
 
@@ -29,7 +29,8 @@ Works on **Windows**, **macOS**, and **Linux**.
 3. Each session opens the browser in stealth mode, scrolls the feed, and reacts to posts
 4. **Keyword matching** determines which posts to react to (or react to all)
 5. **Smart reaction selection** picks the right reaction type (celebrate, insightful, love, etc.) based on post content
-6. **Human-like behavior** — gaussian-distributed delays, variable scroll speed, simulated reading time, mouse movement with jitter
+6. **AI-powered commenting** — optionally generates and posts short, human-sounding comments on engaged posts using OpenAI (gpt-4o-mini or gpt-4o)
+7. **Human-like behavior** — gaussian-distributed delays, variable scroll speed, simulated reading time, mouse movement with jitter
 
 ---
 
@@ -39,8 +40,10 @@ Works on **Windows**, **macOS**, and **Linux**.
 - **3-tier keyword matching** — exact match, fuzzy match (Fuse.js), and secondary keywords
 - **React to All mode** — skip keyword filtering and react to every post
 - **Smart reactions** — maps post content to celebrate/insightful/love/support/funny based on configurable keywords
-- **Web dashboard** — real-time stats, live session logs (SSE), reaction history, keyword editor, settings
-- **Session management** — daily targets, per-session quotas, lockfile-based concurrency guard
+- **AI commenting** — generates short, context-aware comments via OpenAI with safety validation, banned-phrase filtering, and repetition detection
+- **Comment safety** — length bounds, banned corporate/AI phrases, em-dash rejection, emoji limits, Jaccard similarity deduplication
+- **Web dashboard** — real-time stats, live session logs (SSE), reaction/comment history, keyword editor, persona editor, settings
+- **Session management** — daily targets for both reactions and comments, per-session quotas, lockfile-based concurrency guard
 - **Persistent sessions** — login once, browser profile saved to disk, no daily re-authentication
 - **Auto-scheduling** — Windows Task Scheduler or cron, with random jitter to avoid patterns
 - **Error recovery** — screenshots on failure, graceful shutdown on SIGINT/SIGTERM
@@ -53,7 +56,7 @@ Works on **Windows**, **macOS**, and **Linux**.
 # 1. One-command setup (installs dependencies, Playwright browser, creates .env)
 npm run setup
 
-# 2. Edit .env with your USER_NAME, TEAM, and TIMEZONE
+# 2. Edit .env with your TIMEZONE (and OPENAI_API_KEY if you want AI commenting)
 # (or configure via the dashboard Settings page)
 
 # 3. Login to LinkedIn (one-time)
@@ -177,6 +180,14 @@ See the [Scheduling](#scheduling) section below.
 | `TIMEZONE` | `Asia/Kolkata` | Timezone for session windows |
 | `VIEWPORT_WIDTH` | `1366` | Browser viewport width |
 | `VIEWPORT_HEIGHT` | `768` | Browser viewport height |
+| `ENABLE_COMMENTS` | `false` | Enable AI commenting (opt-in) |
+| `COMMENT_DRY_RUN` | `false` | Generate comments without posting (test mode) |
+| `OPENAI_API_KEY` | _(none)_ | Required if commenting is enabled |
+| `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model for comment generation |
+| `DAILY_COMMENT_MIN` | `3` | Minimum daily comments |
+| `DAILY_COMMENT_MAX` | `8` | Maximum daily comments |
+| `COMMENT_MIN_GAP` | `3` | Minimum posts between comments |
+| `COMMENT_MAX_GAP` | `8` | Maximum posts between comments |
 
 All settings can also be changed from the dashboard Settings page.
 
@@ -206,6 +217,26 @@ All settings can also be changed from the dashboard Settings page.
 
 Keywords can be edited from the dashboard Keywords page.
 
+### Commenting Config (config/commenting.json)
+
+```json
+{
+  "persona": "friendly professional who shares practical insights",
+  "bannedPhrases": ["leverage", "paradigm", "as an AI", "game-changer", ...],
+  "minEngagementReactions": 5,
+  "minEngagementComments": 2,
+  "minLength": 15,
+  "maxLength": 200
+}
+```
+
+- **`persona`** — Describes the tone and voice for AI-generated comments
+- **`bannedPhrases`** — 30+ corporate/AI-sounding phrases that trigger comment rejection
+- **`minEngagementReactions`** / **`minEngagementComments`** — Post must have at least this many reactions OR comments to be eligible for commenting
+- **`minLength`** / **`maxLength`** — Comment length bounds (validated before posting)
+
+The persona and banned phrases can be edited from the dashboard Comments page.
+
 ---
 
 ## Dashboard
@@ -216,15 +247,22 @@ The web dashboard at http://localhost:3000 provides:
 - **Status badge** — shows idle, running, login required, or logging in
 - **Start/Stop buttons** — manually trigger or stop sessions
 - **Live session log** — real-time output streamed via Server-Sent Events (SSE)
-- **Stats cards** — today's reactions, sessions, 7-day total, current status
+- **Stats cards** — today's reactions, sessions, 7-day total, today's comments (if enabled)
 - **Charts** — weekly activity bar chart and reaction type breakdown
 - **Recent activity** — last 10 reactions with author, type, match level, keyword
 
 ### Reactions Page
 - Full paginated history of all reactions with content snippets
 
+### Comments Page
+- Table of all comment attempts: time, author, generated comment, status, skip reason
+- Status values: `posted`, `skipped`, `failed`, `dry_run`
+- AI persona editor — textarea to shape the commenting voice
+- Banned phrases tag editor — add/remove phrases that trigger rejection
+- Engagement threshold and comment length settings
+
 ### Sessions Page
-- Session history showing date, window, duration, posts scrolled/matched/reacted/skipped, status
+- Session history showing date, window, duration, posts scrolled/matched/reacted/commented/skipped, status
 
 ### Keywords Page
 - Tag-based editor for primary and secondary keywords
@@ -234,6 +272,7 @@ The web dashboard at http://localhost:3000 provides:
 
 ### Settings Page
 - Session windows, daily targets, jitter, session duration, timezone
+- Comment settings: enable/disable, dry run, daily targets, gap between comments
 - All changes saved to `.env` and take effect on next session
 
 ---
@@ -313,10 +352,14 @@ growleads/
   .env.example                  # Template for .env
   config/
     keywords.json               # Keywords and reaction mappings
+    commenting.json             # AI commenting persona, banned phrases, thresholds
   src/
     index.js                    # Main session runner
     login.js                    # LinkedIn login helper
     config.js                   # Configuration loader
+    ai/
+      comment-generator.js      # OpenAI-powered comment generation
+      comment-safety.js         # Comment validation (banned phrases, length, repetition)
     behavior/
       human.js                  # Human-like behavior (delays, scrolling, clicking)
     browser/
@@ -326,6 +369,9 @@ growleads/
       db.js                     # SQLite database (better-sqlite3)
     feed/
       extractor.js              # Post extraction from DOM
+      comment-extractor.js      # Existing comment extraction for AI context
+      comment-orchestrator.js   # Comment pipeline: extract → generate → validate → post
+      commenter.js              # Browser-level comment typing and submission
       reactor.js                # Reaction clicking logic
       scroller.js               # Feed scrolling with post discovery
       selectors.js              # LinkedIn DOM selectors (centralized)
@@ -355,6 +401,7 @@ growleads/
 | Component | Technology |
 |---|---|
 | Browser automation | Playwright + playwright-extra + stealth plugin |
+| AI comments | OpenAI API (gpt-4o-mini / gpt-4o) |
 | Database | SQLite via better-sqlite3 (WAL mode) |
 | Web server | Express 5 |
 | Fuzzy matching | Fuse.js |
@@ -365,14 +412,15 @@ growleads/
 
 1. **Lockfile check** — prevents concurrent sessions
 2. **Jitter delay** — random wait (0 to `MAX_JITTER_MINUTES`)
-3. **Daily target check** — skip if already met
-4. **Session target calculation** — `ceil(remaining / remaining_windows)`
+3. **Daily target check** — skip if reaction and comment targets already met
+4. **Session target calculation** — `ceil(remaining / remaining_windows)` for both reactions and comments
 5. **Browser launch** — stealth Chromium with persistent profile
 6. **Session validation** — navigate to feed, check for login redirects
 7. **Selector validation** — verify DOM selectors still work
 8. **Feed scrolling** — extract posts, filter seen URNs, detect stuck scrolls
 9. **Post processing** — keyword match, reaction selection, human-like clicking
-10. **Summary** — log stats, update database, release lockfile
+10. **Comment evaluation** — if enabled, check gap/engagement/target criteria, then generate → validate → post
+11. **Summary** — log stats (reactions + comments), update database, release lockfile
 
 ---
 
@@ -400,6 +448,12 @@ del data\session.lock
 # macOS/Linux
 rm data/session.lock
 ```
+
+### Comments not posting
+- Verify `ENABLE_COMMENTS=true` in `.env` and that `OPENAI_API_KEY` is set
+- Check the Comments page in the dashboard — the status/reason columns show why comments were skipped (e.g., `banned_phrase`, `too_short`, `API_ERROR`)
+- If all comments show `dry_run`, set `COMMENT_DRY_RUN=false`
+- If you see repeated API errors, check your OpenAI API key and billing
 
 ### Reaction picker not opening (falls back to Like)
 LinkedIn's hover-triggered reaction picker sometimes needs more time. The system retries once and falls back to Like if the picker doesn't appear. This is normal and doesn't affect engagement metrics.
@@ -443,3 +497,4 @@ All dependencies are cross-platform. The core system has zero platform-specific 
 - The dashboard binds to `127.0.0.1` only (not accessible from other devices on the network)
 - No credentials are stored in config files — authentication is handled via browser cookies
 - The `.env` file is gitignored — no secrets in the repository
+- OpenAI API key is stored only in `.env` (gitignored) and sent only to OpenAI's API endpoint
