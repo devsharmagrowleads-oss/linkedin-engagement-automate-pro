@@ -1,4 +1,4 @@
-# LinkedIn Auto Engage
+# LinkedIn Auto Engage Pro
 
 Automated LinkedIn engagement system that reacts to posts and leaves AI-generated comments with human-like behavior. Runs 3 sessions daily, hits configurable daily targets (45-55 reactions, 3-8 comments), and includes a web dashboard for monitoring and configuration.
 
