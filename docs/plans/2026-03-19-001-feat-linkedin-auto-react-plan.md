@@ -424,8 +424,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
 
 ### Internal References
 
-- Team Playwright patterns: `C:\Users\Claude\Desktop\Growleads\heimtextil\scraper.js`
-- Team project structure: `C:\Users\Claude\Desktop\Growleads\New folder\docs\plans\`
+- Team Playwright patterns: `<path-to-team-projects>/scraper.js`
+- Team project structure: `<path-to-team-projects>/docs/plans/`
 
 ### External References
 

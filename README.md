@@ -19,6 +19,7 @@ Works on **Windows**, **macOS**, and **Linux**.
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
 - [Platform Compatibility](#platform-compatibility)
+- [Admin Server](#admin-server)
 
 ---
 
@@ -77,16 +78,16 @@ npm run dashboard
 
 | Requirement | Minimum Version | Check Command |
 |---|---|---|
-| Node.js | 18.x | `node -v` |
+| Node.js | 20.x | `node -v` |
 | npm | 8.x | `npm -v` |
 
-Download Node.js from https://nodejs.org (LTS recommended).
+Download Node.js from https://nodejs.org (LTS recommended). Node.js 18 and 19 are not supported: the `better-sqlite3` dependency supports Node.js 20, 22, 23, 24 and 25 only. An `.nvmrc` is included, so `nvm use` selects Node.js 20.
 
 ### Step 1: Clone or Copy the Project
 
 ```bash
-git clone <repo-url>
-cd growleads
+git clone https://github.com/devsharmagrowleads-oss/linkedin-engagement-automate-pro.git
+cd linkedin-engagement-automate-pro
 ```
 
 Or copy the project folder. **Do NOT copy** these machine-specific folders:
@@ -488,6 +489,46 @@ All dependencies are cross-platform. The core system has zero platform-specific 
 | `npm start` | Run a single session (manual trigger) |
 | `npm run dashboard` | Start the web dashboard on port 3000 |
 | `npm run login` | Open browser for LinkedIn login |
+
+---
+
+## Admin Server
+
+The `admin/` folder is a separate, optional project: a small Express + SQLite server that collects usage reports from each installation and shows them on a team dashboard. It has its own `package.json` and is not installed by the root `npm install`. It needs Node.js 20 or newer, same as the main project.
+
+### Run it locally
+
+```bash
+cd admin
+npm install
+cp .env.example .env
+npm start
+```
+
+Open http://localhost:4000. Settings in `admin/.env`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `ADMIN_PORT` | `4000` | Port the server listens on |
+| `ADMIN_API_KEY` | _(none)_ | Bearer token required by the API. If left unset, the API is open to anyone who can reach it |
+| `INACTIVE_HOURS` | `48` | Hours without a report before a user is shown as inactive |
+| `DOMAIN` | _(none)_ | Public hostname, used only by the Docker/Caddy setup below |
+
+### Run it with Docker
+
+`admin/docker-compose.yml` builds the server from `admin/Dockerfile` and puts Caddy in front of it for HTTPS on ports 80 and 443. Set `DOMAIN` in `admin/.env` to a hostname that points at the machine, then:
+
+```bash
+cd admin
+cp .env.example .env
+docker compose up -d --build
+```
+
+`admin/deploy.sh` does the same on a fresh Ubuntu server: it installs Docker, opens ports 80 and 443, asks for the domain and API key, writes `.env` and starts the containers. `admin/render.yaml` is a Render blueprint for the same server.
+
+### Connect an installation to it
+
+In the main project `.env`, set `ADMIN_API_URL` to the admin server address and `ADMIN_API_KEY` to the same key the server uses. Leave `ADMIN_API_URL` empty to disable reporting.
 
 ---
 
